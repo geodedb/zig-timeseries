@@ -106,7 +106,7 @@ test "integration: preprocessing z-normalize" {
 }
 
 test "integration: ABI version" {
-    try std.testing.expect(lib.abi.ts_version() == 1);
+    try std.testing.expect(lib.abi.ts_version() == 2);
 }
 
 test "integration: chunk storage write -> queryRange round-trip" {

@@ -10,7 +10,7 @@
 
 This security review identified **16 findings** across the timeseries library, grouped into **10 tracked issues**. The library exposes a C ABI consumed via Go CGO, making input validation at the boundary critical.
 
-**Cycle status (2026-03-22):** 7 findings closed (S1, S3, S4+S13, S6, S7, S8+S9+S10, S16), 5 deferred to v2 or separate MR (S5, S11, S12, S14, S15), 1 open (S2).
+**Cycle status (2026-03-22):** 9 findings closed (S1, S3, S4+S13, S5, S6, S7, S8+S9+S10, S15, S16), 3 deferred to separate MR (S11, S12, S14), 1 open (S2).
 
 | Severity | Count | Immediate Action Required |
 |----------|-------|---------------------------|
@@ -36,7 +36,7 @@ This security review identified **16 findings** across the timeseries library, g
 |------|----------|------------|---------|-----------|-------------|---------------------|-------|-----|-------|-----|--------|
 | 1 | Critical | 100 | S1: Negative length @intCast panic/UB | ABI/all modules | CWE-839, CWE-190 / A03:2021 | dtw.zig:24-25, +15 sites | [#38](../../-/issues/38) (CONFIDENTIAL) | Validate c_int >= 0 before cast | TBD | 2026-03-24 | **Closed** (2026-03-22). Guards added before all @intCast in 17 functions. |
 | 2 | Critical | 80 | S2: OOB reads via many-pointers | ABI/all modules | CWE-125 / A03:2021 | dtw.zig:41, all functions | [#45](../../-/issues/45) (CONFIDENTIAL) | Convert to bounded slices at ABI boundary | TBD | 2026-03-24 | Triage |
-| 3 | High | 80 | S5: Output buffer overflow | ABI layer | CWE-120, CWE-787 / A03:2021 | abi.zig:26-27, 146, 212-213, 238 | [#53](../../-/issues/53) (CONFIDENTIAL) | Add capacity params to all output buffers | TBD | 2026-03-29 | **Won't Do** (deferred to v2). ABI-breaking change requiring Go CGO consumer coordination. |
+| 3 | High | 80 | S5: Output buffer overflow | ABI layer | CWE-120, CWE-787 / A03:2021 | abi.zig:26-27, 146, 212-213, 238 | [#53](../../-/issues/53) (CONFIDENTIAL) | Add capacity params to all output buffers | TBD | 2026-03-29 | **Closed** (2026-03-22). ABI v2: Added path_cap to ts_dtw/ts_dtw_derivative/ts_dtw_open_end/ts_dtw_shape, cps_cap to ts_pelt, out_cap to ts_matrix_profile. All enforce capacity before writing output. |
 | 4 | High | 80 | S4+S13: Integer overflow n*m + ReleaseFast UB | DTW/distances + build | CWE-190, CWE-787 / A03:2021 | dtw.zig:30,161,266,365; build.zig:8 | [#38](../../-/issues/38) (CONFIDENTIAL) | Overflow-checked mul; enforce ReleaseSafe | TBD | 2026-03-29 | **Closed** (2026-03-22). std.math.mul checked multiplication at 8 allocation sites in dtw.zig (4) and distances.zig (4). |
 | 5 | High | 60 | S3: Quadratic memory exhaustion DoS | DTW/distances | CWE-789, CWE-400 / A05:2021 | dtw.zig:30, distances.zig:116,156,198,239 | [#48](../../-/issues/48) (CONFIDENTIAL) | Max allocation cap (256 MB default) | TBD | 2026-03-29 | **Closed** (2026-03-22). MAX_ALLOC_ELEMENTS cap (256MB) added in dtw.zig and distances.zig. All allocations check against cap. |
 | 6 | High | 48 | S6: NULL pointer dereference | ABI layer | CWE-476 / A03:2021 | abi.zig:32, all output writes | [#57](../../-/issues/57) (CONFIDENTIAL) | NULL check all output pointers | TBD | 2026-03-29 | **Closed** (2026-03-22). Added `@intFromPtr` null checks for all output pointers in all 15 ABI functions (dist, path_i, path_j, path_len, lag, corr, cps, cps_len, profile, indices, profile_len, features_out). 20 tests verify null rejection. |
@@ -48,7 +48,7 @@ This security review identified **16 findings** across the timeseries library, g
 | 12 | Medium | 24 | S9: Symlink following | chunk_storage | CWE-59 / A01:2021 | chunk_storage.zig:182-190 | [#61](../../-/issues/61) (CONFIDENTIAL) | O_NOFOLLOW on dir open | TBD | 2026-04-21 | **Closed** (2026-03-22). Covered under S8+S9+S10 filesystem hardening. |
 | 13 | Medium | 24 | S10: Default file permissions | chunk_storage | CWE-732 / A01:2021 | chunk_storage.zig:190-193 | [#61](../../-/issues/61) (CONFIDENTIAL) | Explicit mode 0o600 | TBD | 2026-04-21 | **Closed** (2026-03-22). Covered under S8+S9+S10 filesystem hardening. |
 | 14 | Medium | 24 | S12: CI components semver not SHA | CI/CD | CWE-829 / A08:2021 | .gitlab-ci.yml:7-20 | [#66](../../-/issues/66) | Pin to immutable SHAs | TBD | 2026-04-21 | **Won't Do** (deferred). CI/CD infra change -- separate MR. |
-| 15 | Medium | 24 | S15: Error signaling inconsistency | ABI layer | CWE-252 / A04:2021 | abi.zig:110-112, 244-250 | [#71](../../-/issues/71) | Change to int return + output pointer | TBD | 2026-04-21 | **Won't Do** (deferred to v2). ABI-breaking change requiring Go CGO consumer coordination. |
+| 15 | Medium | 24 | S15: Error signaling inconsistency | ABI layer | CWE-252 / A04:2021 | abi.zig:110-112, 244-250 | [#71](../../-/issues/71) | Change to int return + output pointer | TBD | 2026-04-21 | **Closed** (2026-03-22). ABI v2: ts_lb_keogh and ts_cosine_similarity now return int (0/-1) with result via output pointer. Null checks on result pointer added. |
 
 ---
 

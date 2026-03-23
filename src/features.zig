@@ -131,6 +131,7 @@ pub fn extractFeatures(
 }
 
 /// Cosine similarity between two vectors.
+/// Uses @Vector(4, f64) SIMD for the inner accumulation loop.
 pub fn cosineSimilarity(
     a: [*]const f64,
     b: [*]const f64,
@@ -140,16 +141,39 @@ pub fn cosineSimilarity(
     const n: usize = @intCast(len);
     if (n == 0) return 0;
 
-    var dot: f64 = 0;
-    var norm_a: f64 = 0;
-    var norm_b: f64 = 0;
-    for (0..n) |i| {
-        dot += a[i] * b[i];
-        norm_a += a[i] * a[i];
-        norm_b += b[i] * b[i];
+    const Vec4 = @Vector(4, f64);
+    const zero: Vec4 = @splat(0.0);
+    var dot_v: Vec4 = zero;
+    var norm_a_v: Vec4 = zero;
+    var norm_b_v: Vec4 = zero;
+
+    const a_slice = a[0..n];
+    const b_slice = b[0..n];
+
+    const chunks = n / 4;
+    for (0..chunks) |c| {
+        const base = c * 4;
+        const ai: Vec4 = a_slice[base..][0..4].*;
+        const bi: Vec4 = b_slice[base..][0..4].*;
+        dot_v += ai * bi;
+        norm_a_v += ai * ai;
+        norm_b_v += bi * bi;
     }
 
-    const denom = @sqrt(norm_a) * @sqrt(norm_b);
+    // Reduce vectors to scalars.
+    var dot = @reduce(.Add, dot_v);
+    var norm_a_acc = @reduce(.Add, norm_a_v);
+    var norm_b_acc = @reduce(.Add, norm_b_v);
+
+    // Handle remaining elements (n mod 4).
+    const remainder_start = chunks * 4;
+    for (remainder_start..n) |i| {
+        dot += a_slice[i] * b_slice[i];
+        norm_a_acc += a_slice[i] * a_slice[i];
+        norm_b_acc += b_slice[i] * b_slice[i];
+    }
+
+    const denom = @sqrt(norm_a_acc) * @sqrt(norm_b_acc);
     if (denom < 1e-15) return 0;
     return dot / denom;
 }

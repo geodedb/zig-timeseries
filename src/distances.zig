@@ -19,7 +19,218 @@ const MAX_ALLOC_F64: usize = 256 * 1024 * 1024 / @sizeOf(f64);
 /// Maximum number of i32 elements allowed in a single allocation (256 MB cap).
 const MAX_ALLOC_I32: usize = 256 * 1024 * 1024 / @sizeOf(i32);
 
+/// Threshold below which brute-force cross-correlation is faster than FFT.
+const FFT_THRESHOLD: usize = 64;
+
+/// Radix-2 Cooley-Tukey in-place FFT (or inverse FFT).
+/// `real` and `imag` are modified in-place. `n` must be a power of 2.
+fn fft(real: []f64, imag: []f64, n: usize, inverse: bool) void {
+    // Bit-reversal permutation.
+    var j: usize = 0;
+    for (1..n) |i| {
+        var bit = n >> 1;
+        while (j & bit != 0) {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if (i < j) {
+            std.mem.swap(f64, &real[i], &real[j]);
+            std.mem.swap(f64, &imag[i], &imag[j]);
+        }
+    }
+
+    // Butterfly stages.
+    var len: usize = 2;
+    while (len <= n) : (len <<= 1) {
+        const angle = 2.0 * math.pi / @as(f64, @floatFromInt(len)) *
+            if (inverse) @as(f64, -1.0) else @as(f64, 1.0);
+        const wlen_r = @cos(angle);
+        const wlen_i = @sin(angle);
+        var i: usize = 0;
+        while (i < n) : (i += len) {
+            var w_r: f64 = 1.0;
+            var w_i: f64 = 0.0;
+            for (0..len / 2) |k| {
+                const u_r = real[i + k];
+                const u_i = imag[i + k];
+                const v_r = real[i + k + len / 2] * w_r - imag[i + k + len / 2] * w_i;
+                const v_i = real[i + k + len / 2] * w_i + imag[i + k + len / 2] * w_r;
+                real[i + k] = u_r + v_r;
+                imag[i + k] = u_i + v_i;
+                real[i + k + len / 2] = u_r - v_r;
+                imag[i + k + len / 2] = u_i - v_i;
+                const new_w_r = w_r * wlen_r - w_i * wlen_i;
+                const new_w_i = w_r * wlen_i + w_i * wlen_r;
+                w_r = new_w_r;
+                w_i = new_w_i;
+            }
+        }
+    }
+
+    if (inverse) {
+        const inv_n = 1.0 / @as(f64, @floatFromInt(n));
+        for (0..n) |i| {
+            real[i] *= inv_n;
+            imag[i] *= inv_n;
+        }
+    }
+}
+
+/// Return the smallest power of 2 >= v.
+fn nextPowerOf2(v: usize) usize {
+    if (v == 0) return 1;
+    var p: usize = 1;
+    while (p < v) p <<= 1;
+    return p;
+}
+
+/// Brute-force cross-correlation for small inputs.
+/// Computes normalized cross-correlation and finds the optimal lag.
+fn crossCorrelateBruteForce(
+    a: [*]const f64,
+    n: usize,
+    mean_a: f64,
+    norm_a: f64,
+    b: [*]const f64,
+    m: usize,
+    mean_b: f64,
+    norm_b: f64,
+    lag_out: *i32,
+    corr_out: *f64,
+) void {
+    const max_lag: i32 = @intCast(@max(n, m) - 1);
+    var best_corr: f64 = -math.inf(f64);
+    var best_lag: i32 = 0;
+
+    var lag: i32 = -max_lag;
+    while (lag <= max_lag) : (lag += 1) {
+        var cc: f64 = 0;
+        const start_a: usize = if (lag >= 0) @intCast(lag) else 0;
+        const start_b: usize = if (lag < 0) @intCast(-lag) else 0;
+
+        var ia = start_a;
+        var ib = start_b;
+        while (ia < n and ib < m) {
+            cc += (a[ia] - mean_a) * (b[ib] - mean_b);
+            ia += 1;
+            ib += 1;
+        }
+
+        const ncc = cc / (norm_a * norm_b);
+        if (ncc > best_corr) {
+            best_corr = ncc;
+            best_lag = lag;
+        }
+    }
+
+    lag_out.* = best_lag;
+    corr_out.* = best_corr;
+}
+
+/// FFT-based cross-correlation for large inputs. O(n log n) instead of O(n^2).
+/// Uses page_allocator for internal FFT buffers. Returns -1 on allocation failure.
+fn crossCorrelateFFT(
+    a: [*]const f64,
+    n: usize,
+    mean_a: f64,
+    norm_a: f64,
+    b: [*]const f64,
+    m: usize,
+    mean_b: f64,
+    norm_b: f64,
+    lag_out: *i32,
+    corr_out: *f64,
+) i32 {
+    const allocator = std.heap.page_allocator;
+    const conv_len = n + m - 1;
+    const fft_size = nextPowerOf2(conv_len);
+
+    // Guard against absurdly large allocations.
+    if (fft_size > MAX_ALLOC_F64) return -1;
+
+    // Allocate FFT buffers: real and imaginary parts for both series.
+    const ar = allocator.alloc(f64, fft_size) catch return -1;
+    defer allocator.free(ar);
+    const ai = allocator.alloc(f64, fft_size) catch return -1;
+    defer allocator.free(ai);
+    const br = allocator.alloc(f64, fft_size) catch return -1;
+    defer allocator.free(br);
+    const bi = allocator.alloc(f64, fft_size) catch return -1;
+    defer allocator.free(bi);
+
+    // Fill with mean-centered values, zero-pad the rest.
+    for (0..fft_size) |i| {
+        ar[i] = if (i < n) a[i] - mean_a else 0;
+        ai[i] = 0;
+        br[i] = if (i < m) b[i] - mean_b else 0;
+        bi[i] = 0;
+    }
+
+    // Forward FFT on both.
+    fft(ar, ai, fft_size, false);
+    fft(br, bi, fft_size, false);
+
+    // Pointwise multiply: A * conj(B) -> cross-correlation in frequency domain.
+    // conj(B) = (br, -bi), so A * conj(B) = (ar*br + ai*bi, ai*br - ar*bi).
+    for (0..fft_size) |i| {
+        const r = ar[i] * br[i] + ai[i] * bi[i];
+        const im = ai[i] * br[i] - ar[i] * bi[i];
+        ar[i] = r;
+        ai[i] = im;
+    }
+
+    // Inverse FFT to get cross-correlation values.
+    fft(ar, ai, fft_size, true);
+
+    // The result ar[k] gives the cross-correlation at lag = k - (m - 1).
+    // But we used zero-padding from the left for b, so the mapping is:
+    // ar[k] for k in [0..conv_len) corresponds to lag = k - (m-1).
+    //
+    // However, since we zero-padded a[0..n] and b[0..m] starting at index 0,
+    // the FFT cross-correlation ar[k] actually gives the correlation for
+    // shifting b by k positions to the right relative to a.
+    // Specifically: CC(k) = sum_{i} a_centered[i] * b_centered[i - k]
+    // which means ar[k] = CC at lag k (for k = 0..n-1),
+    // and ar[fft_size - k] = CC at lag -k (for k = 1..m-1).
+    //
+    // Map: lag l corresponds to:
+    //   l >= 0: ar[l]
+    //   l < 0:  ar[fft_size + l]
+
+    const norm_product = norm_a * norm_b;
+    var best_corr: f64 = -math.inf(f64);
+    var best_lag: i32 = 0;
+    const max_lag_pos: usize = n - 1; // positive lags 0..n-1
+    const max_lag_neg: usize = m - 1; // negative lags -1..-(m-1)
+
+    // Check non-negative lags: 0..max_lag_pos
+    for (0..max_lag_pos + 1) |k| {
+        const ncc = ar[k] / norm_product;
+        if (ncc > best_corr) {
+            best_corr = ncc;
+            best_lag = @intCast(k);
+        }
+    }
+
+    // Check negative lags: -1..-(max_lag_neg)
+    for (1..max_lag_neg + 1) |k| {
+        const ncc = ar[fft_size - k] / norm_product;
+        const lag_val: i32 = -@as(i32, @intCast(k));
+        if (ncc > best_corr) {
+            best_corr = ncc;
+            best_lag = lag_val;
+        }
+    }
+
+    lag_out.* = best_lag;
+    corr_out.* = best_corr;
+    return 0;
+}
+
 /// Normalized cross-correlation returning optimal lag and correlation.
+/// Uses FFT-based O(n log n) algorithm for large inputs and brute-force
+/// O(n^2) for small inputs (n,m < 64) where FFT overhead is not worthwhile.
 pub fn crossCorrelate(
     a: [*]const f64,
     a_len: i32,
@@ -61,33 +272,18 @@ pub fn crossCorrelate(
         return 0;
     }
 
-    const max_lag: i32 = @intCast(@max(n, m) - 1);
-    var best_corr: f64 = -math.inf(f64);
-    var best_lag: i32 = 0;
-
-    var lag: i32 = -max_lag;
-    while (lag <= max_lag) : (lag += 1) {
-        var cc: f64 = 0;
-        const start_a: usize = if (lag >= 0) @intCast(lag) else 0;
-        const start_b: usize = if (lag < 0) @intCast(-lag) else 0;
-
-        var ia = start_a;
-        var ib = start_b;
-        while (ia < n and ib < m) {
-            cc += (a[ia] - mean_a) * (b[ib] - mean_b);
-            ia += 1;
-            ib += 1;
-        }
-
-        const ncc = cc / (norm_a * norm_b);
-        if (ncc > best_corr) {
-            best_corr = ncc;
-            best_lag = lag;
-        }
+    // Use brute-force for small inputs where FFT overhead is not worthwhile.
+    if (n < FFT_THRESHOLD and m < FFT_THRESHOLD) {
+        crossCorrelateBruteForce(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
+        return 0;
     }
 
-    lag_out.* = best_lag;
-    corr_out.* = best_corr;
+    // Use FFT-based O(n log n) cross-correlation for larger inputs.
+    // Falls back to brute-force if allocation fails.
+    const rc = crossCorrelateFFT(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
+    if (rc != 0) {
+        crossCorrelateBruteForce(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
+    }
     return 0;
 }
 

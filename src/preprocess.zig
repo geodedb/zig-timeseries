@@ -59,8 +59,9 @@ pub fn resample(
 }
 
 /// Z-normalize a series in-place: subtract mean, divide by std dev.
-/// Modifies `values` directly; the original data is overwritten.
+/// NOTE: Modifies `values` in-place; the original data is overwritten.
 /// Constant series (std_dev == 0) is set to all zeros.
+/// NOTE: This function modifies `values` in-place. The caller's original data is overwritten.
 pub fn zNormalize(values: []f64) void {
     if (values.len == 0) return;
 
@@ -85,7 +86,7 @@ pub fn zNormalize(values: []f64) void {
 }
 
 /// Subtract a moving-average baseline from the series in-place.
-/// Modifies `values` directly; the original data is overwritten.
+/// NOTE: Modifies `values` in-place; the original data is overwritten.
 /// `window_pct` is the fraction of the series length used as window size.
 /// Uses a prefix sum for O(n) computation instead of O(n*w).
 pub fn baselineCorrect(allocator: std.mem.Allocator, values: []f64, window_pct: f64) void {

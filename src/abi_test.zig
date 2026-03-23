@@ -9,8 +9,8 @@ const abi = @import("abi.zig");
 const expect = std.testing.expect;
 const expectApprox = std.testing.expectApproxEqAbs;
 
-test "ABI: ts_version returns 1" {
-    try expect(abi.ts_version() == 1);
+test "ABI: ts_version returns 2" {
+    try expect(abi.ts_version() == 2);
 }
 
 test "ABI: ts_dtw identical -> distance 0" {
@@ -19,8 +19,7 @@ test "ABI: ts_dtw identical -> distance 0" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen);
+    const rc = abi.ts_dtw(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 10);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
 }
@@ -31,8 +30,7 @@ test "ABI: ts_dtw_derivative identical -> distance 0" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw_derivative(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen);
+    const rc = abi.ts_dtw_derivative(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 10);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
 }
@@ -43,8 +41,7 @@ test "ABI: ts_dtw_open_end identical" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw_open_end(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen);
+    const rc = abi.ts_dtw_open_end(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 10);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
 }
@@ -55,8 +52,7 @@ test "ABI: ts_dtw_shape identical" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw_shape(&a, 5, &a, 5, 0, 3, &dist, &pi, &pj, &plen);
+    const rc = abi.ts_dtw_shape(&a, 5, &a, 5, 0, 3, &dist, &pi, &pj, &plen, 10);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
 }
@@ -64,7 +60,6 @@ test "ABI: ts_dtw_shape identical" {
 test "ABI: ts_soft_dtw identical" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_soft_dtw(&a, 5, &a, 5, 1.0, &dist);
     try expect(rc == 0);
     try expect(dist < 1.0);
@@ -73,16 +68,15 @@ test "ABI: ts_soft_dtw identical" {
 test "ABI: ts_lb_keogh lower bound" {
     const a = [_]f64{ 1, 3, 5, 2, 4 };
     const b = [_]f64{ 2, 4, 1, 3, 5 };
-
-    const lb = abi.ts_lb_keogh(&a, 5, &b, 5, 1);
+    var lb: f64 = undefined;
+    const lb_rc = abi.ts_lb_keogh(&a, 5, &b, 5, 1, &lb);
+    try expect(lb_rc == 0);
     try expect(lb >= 0);
-
     var dtw_dist: f64 = undefined;
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    _ = abi.ts_dtw(&a, 5, &b, 5, 1, &dtw_dist, &pi, &pj, &plen);
-
+    _ = abi.ts_dtw(&a, 5, &b, 5, 1, &dtw_dist, &pi, &pj, &plen, 10);
     try expect(lb <= dtw_dist + 1e-10);
 }
 
@@ -90,7 +84,6 @@ test "ABI: ts_cross_correlate identical -> lag 0, corr 1" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var lag: c_int = undefined;
     var corr: f64 = undefined;
-
     const rc = abi.ts_cross_correlate(&a, 5, &a, 5, &lag, &corr);
     try expect(rc == 0);
     try expect(lag == 0);
@@ -100,7 +93,6 @@ test "ABI: ts_cross_correlate identical -> lag 0, corr 1" {
 test "ABI: ts_sbd identical -> 0" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_sbd(&a, 5, &a, 5, &dist);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
@@ -110,8 +102,7 @@ test "ABI: ts_pelt detects change points" {
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps: [10]i32 = undefined;
     var cps_len: c_int = undefined;
-
-    const rc = abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len);
+    const rc = abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len, 10);
     try expect(rc == 0);
     try expect(cps_len >= 1);
 }
@@ -119,7 +110,6 @@ test "ABI: ts_pelt detects change points" {
 test "ABI: ts_lcss identical -> 0" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_lcss(&a, 5, &a, 5, 0.5, 2, &dist);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
@@ -128,7 +118,6 @@ test "ABI: ts_lcss identical -> 0" {
 test "ABI: ts_edr identical -> 0" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_edr(&a, 5, &a, 5, 0.5, &dist);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
@@ -137,7 +126,6 @@ test "ABI: ts_edr identical -> 0" {
 test "ABI: ts_erp identical -> 0" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_erp(&a, 5, &a, 5, 0.0, &dist);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
@@ -147,7 +135,6 @@ test "ABI: ts_twed identical -> 0" {
     const v = [_]f64{ 1, 2, 3, 4, 5 };
     const t = [_]f64{ 0, 1, 2, 3, 4 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_twed(&v, 5, &t, &v, 5, &t, 0.5, 0.5, &dist);
     try expect(rc == 0);
     try expectApprox(dist, 0.0, 1e-10);
@@ -158,8 +145,7 @@ test "ABI: ts_matrix_profile" {
     var profile: [15]f64 = undefined;
     var indices: [15]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_matrix_profile(&values, 15, 4, &profile, &indices, &plen);
+    const rc = abi.ts_matrix_profile(&values, 15, 4, &profile, &indices, &plen, 15);
     try expect(rc == 0);
     try expect(plen == 12);
 }
@@ -167,7 +153,6 @@ test "ABI: ts_matrix_profile" {
 test "ABI: ts_mp_dist" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
     const rc = abi.ts_mp_dist(&a, 10, &a, 10, 3, &dist);
     try expect(rc == 0);
     try expect(dist >= 0);
@@ -176,7 +161,6 @@ test "ABI: ts_mp_dist" {
 test "ABI: ts_extract_features" {
     const values = [_]f64{ 1, 2, 3, 4, 5 };
     var feats: [22]f64 = undefined;
-
     const rc = abi.ts_extract_features(&values, 5, &feats);
     try expect(rc == 0);
     try expectApprox(feats[0], 5.0, 1e-10);
@@ -185,13 +169,104 @@ test "ABI: ts_extract_features" {
 
 test "ABI: ts_cosine_similarity identical -> 1.0" {
     const a = [_]f64{ 1, 2, 3 };
-    const sim = abi.ts_cosine_similarity(&a, &a, 3);
+    var sim: f64 = undefined;
+    const rc = abi.ts_cosine_similarity(&a, &a, 3, &sim);
+    try expect(rc == 0);
     try expectApprox(sim, 1.0, 1e-10);
 }
 
-// ============================================================================
-// Security: NaN/Inf input validation (S7)
-// ============================================================================
+// S5: Output buffer capacity overflow tests
+
+test "ABI: ts_dtw path_cap=0 -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 0) == -1);
+}
+
+test "ABI: ts_dtw_derivative path_cap=0 -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_derivative(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 0) == -1);
+}
+
+test "ABI: ts_dtw_open_end path_cap=0 -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_open_end(&a, 5, &a, 5, 0, &dist, &pi, &pj, &plen, 0) == -1);
+}
+
+test "ABI: ts_dtw_shape path_cap=0 -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_shape(&a, 5, &a, 5, 0, 3, &dist, &pi, &pj, &plen, 0) == -1);
+}
+
+test "ABI: ts_pelt cps_cap=0 -> error" {
+    const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
+    var cps: [10]i32 = undefined;
+    var cps_len: c_int = undefined;
+    try expect(abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len, 0) == -1);
+}
+
+test "ABI: ts_matrix_profile out_cap=0 -> error" {
+    const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
+    var profile: [15]f64 = undefined;
+    var indices: [15]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_matrix_profile(&values, 15, 4, &profile, &indices, &plen, 0) == -1);
+}
+
+test "ABI: ts_dtw negative path_cap -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw(&a, 3, &a, 3, 0, &dist, &pi, &pj, &plen, -1) == -1);
+}
+
+// S15: Error signaling for f64-returning functions
+
+test "ABI: ts_lb_keogh returns int 0 on success" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var result: f64 = undefined;
+    try expect(abi.ts_lb_keogh(&a, 5, &a, 5, 1, &result) == 0);
+    try expect(result >= 0);
+}
+
+test "ABI: ts_lb_keogh negative length -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var result: f64 = undefined;
+    try expect(abi.ts_lb_keogh(&a, -1, &a, 3, 1, &result) == -1);
+}
+
+test "ABI: ts_cosine_similarity returns int 0 on success" {
+    const a = [_]f64{ 1, 0, 0 };
+    const b = [_]f64{ 0, 1, 0 };
+    var result: f64 = undefined;
+    try expect(abi.ts_cosine_similarity(&a, &b, 3, &result) == 0);
+    try expectApprox(result, 0.0, 1e-10);
+}
+
+test "ABI: ts_cosine_similarity negative length -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var result: f64 = undefined;
+    try expect(abi.ts_cosine_similarity(&a, &a, -1, &result) == -1);
+}
+
+// NaN/Inf input validation (S7)
 
 test "ABI: ts_dtw NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
@@ -200,9 +275,7 @@ test "ABI: ts_dtw NaN input -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw(&a, 3, &b, 3, 0, &dist, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(abi.ts_dtw(&a, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw Inf input -> error" {
@@ -212,9 +285,7 @@ test "ABI: ts_dtw Inf input -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw(&a, 3, &b, 3, 0, &dist, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(abi.ts_dtw(&a, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_derivative NaN input -> error" {
@@ -224,26 +295,21 @@ test "ABI: ts_dtw_derivative NaN input -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw_derivative(&a, 5, &b, 5, 0, &dist, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(abi.ts_dtw_derivative(&a, 5, &b, 5, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_soft_dtw NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_soft_dtw(&a, 3, &b, 3, 1.0, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_soft_dtw(&a, 3, &b, 3, 1.0, &dist) == -1);
 }
 
-test "ABI: ts_lb_keogh NaN input -> 0" {
+test "ABI: ts_lb_keogh NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
-
-    const lb = abi.ts_lb_keogh(&a, 3, &b, 3, 1);
-    try expectApprox(lb, 0.0, 1e-10);
+    var result: f64 = undefined;
+    try expect(abi.ts_lb_keogh(&a, 3, &b, 3, 1, &result) == -1);
 }
 
 test "ABI: ts_cross_correlate NaN input -> error" {
@@ -251,45 +317,35 @@ test "ABI: ts_cross_correlate NaN input -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var lag: c_int = undefined;
     var corr: f64 = undefined;
-
-    const rc = abi.ts_cross_correlate(&a, 3, &b, 3, &lag, &corr);
-    try expect(rc == -1);
+    try expect(abi.ts_cross_correlate(&a, 3, &b, 3, &lag, &corr) == -1);
 }
 
 test "ABI: ts_sbd Inf input -> error" {
     const a = [_]f64{ 1, -std.math.inf(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_sbd(&a, 3, &b, 3, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_sbd(&a, 3, &b, 3, &dist) == -1);
 }
 
 test "ABI: ts_lcss NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_lcss(&a, 3, &b, 3, 0.5, 2, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_lcss(&a, 3, &b, 3, 0.5, 2, &dist) == -1);
 }
 
 test "ABI: ts_edr NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_edr(&a, 3, &b, 3, 0.5, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_edr(&a, 3, &b, 3, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_erp Inf input -> error" {
     const a = [_]f64{ 1, std.math.inf(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_erp(&a, 3, &b, 3, 0.0, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_erp(&a, 3, &b, 3, 0.0, &dist) == -1);
 }
 
 test "ABI: ts_twed NaN in times -> error" {
@@ -297,9 +353,7 @@ test "ABI: ts_twed NaN in times -> error" {
     const t_ok = [_]f64{ 0, 1, 2 };
     const t_bad = [_]f64{ 0, std.math.nan(f64), 2 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_twed(&v, 3, &t_bad, &v, 3, &t_ok, 0.5, 0.5, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_twed(&v, 3, &t_bad, &v, 3, &t_ok, 0.5, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_matrix_profile NaN input -> error" {
@@ -307,48 +361,37 @@ test "ABI: ts_matrix_profile NaN input -> error" {
     var profile: [10]f64 = undefined;
     var indices: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_matrix_profile(&values, 10, 3, &profile, &indices, &plen);
-    try expect(rc == -1);
+    try expect(abi.ts_matrix_profile(&values, 10, 3, &profile, &indices, &plen, 10) == -1);
 }
 
 test "ABI: ts_mp_dist Inf input -> error" {
     const a = [_]f64{ 1, 2, 3, std.math.inf(f64), 5, 1, 2, 3, 4, 5 };
     const b = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-
-    const rc = abi.ts_mp_dist(&a, 10, &b, 10, 3, &dist);
-    try expect(rc == -1);
+    try expect(abi.ts_mp_dist(&a, 10, &b, 10, 3, &dist) == -1);
 }
 
 test "ABI: ts_extract_features NaN input -> error" {
     const values = [_]f64{ 1, std.math.nan(f64), 3 };
     var feats: [22]f64 = undefined;
-
-    const rc = abi.ts_extract_features(&values, 3, &feats);
-    try expect(rc == -1);
+    try expect(abi.ts_extract_features(&values, 3, &feats) == -1);
 }
 
-test "ABI: ts_cosine_similarity NaN input -> 0" {
+test "ABI: ts_cosine_similarity NaN input -> error" {
     const a = [_]f64{ 1, std.math.nan(f64), 3 };
     const b = [_]f64{ 1, 2, 3 };
-
-    const sim = abi.ts_cosine_similarity(&a, &b, 3);
-    try expectApprox(sim, 0.0, 1e-10);
+    var result: f64 = undefined;
+    try expect(abi.ts_cosine_similarity(&a, &b, 3, &result) == -1);
 }
 
 test "ABI: ts_pelt NaN input -> error" {
     const values = [_]f64{ 1, std.math.nan(f64), 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps: [10]i32 = undefined;
     var cps_len: c_int = undefined;
-
-    const rc = abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len);
-    try expect(rc == -1);
+    try expect(abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len, 10) == -1);
 }
 
-// ============================================================================
-// Security: Negative length through ABI (GAP-0021/S1)
-// ============================================================================
+// Negative length (S1)
 
 test "ABI: ts_dtw negative length -> error" {
     const a = [_]f64{ 1, 2, 3 };
@@ -356,152 +399,38 @@ test "ABI: ts_dtw negative length -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
-    const rc = abi.ts_dtw(&a, -1, &a, 3, 0, &dist, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(abi.ts_dtw(&a, -1, &a, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_extract_features negative length -> error" {
     const values = [_]f64{ 1, 2, 3 };
     var feats: [22]f64 = undefined;
-
-    const rc = abi.ts_extract_features(&values, -1, &feats);
-    try expect(rc == -1);
+    try expect(abi.ts_extract_features(&values, -1, &feats) == -1);
 }
 
-test "ABI: ts_cosine_similarity negative length -> 0" {
+test "ABI: ts_cosine_similarity negative length -> error (via S15)" {
     const a = [_]f64{ 1, 2, 3 };
-
-    const sim = abi.ts_cosine_similarity(&a, &a, -1);
-    try expectApprox(sim, 0.0, 1e-10);
+    var result: f64 = undefined;
+    try expect(abi.ts_cosine_similarity(&a, &a, -1, &result) == -1);
 }
 
-// ============================================================================
-// Security: NULL output pointer checks (S6)
-// ============================================================================
-
-// The ABI functions use callconv(.c), so we call them via C function pointer
-// types that accept optional pointers, which allows passing null (address 0).
-// This mirrors a C caller passing NULL for output parameters.
+// NULL output pointer checks (S6)
 
 const NullTestHelpers = struct {
-    // C-compatible function pointer type for DTW-family functions with path output.
-    const DtwFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        c_int,
-        ?*f64,
-        ?[*]i32,
-        ?[*]i32,
-        ?*c_int,
-    ) callconv(.c) c_int;
-
-    // Shape DTW has an extra descriptor_len param.
-    const ShapeDtwFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        c_int,
-        c_int,
-        ?*f64,
-        ?[*]i32,
-        ?[*]i32,
-        ?*c_int,
-    ) callconv(.c) c_int;
-
-    // Soft DTW / SBD / EDR / ERP / MP dist style: two series + params + dist out.
-    const DistFn2 = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        f64,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const SbdFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const CrossCorrFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        ?*c_int,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const PeltFn = *const fn (
-        [*]const f64,
-        c_int,
-        f64,
-        c_int,
-        ?[*]i32,
-        ?*c_int,
-    ) callconv(.c) c_int;
-
-    const LcssFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        f64,
-        c_int,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const ErpFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        f64,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const TwedFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        f64,
-        f64,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const MatrixProfileFn = *const fn (
-        [*]const f64,
-        c_int,
-        c_int,
-        ?[*]f64,
-        ?[*]i32,
-        ?*c_int,
-    ) callconv(.c) c_int;
-
-    const MpDistFn = *const fn (
-        [*]const f64,
-        c_int,
-        [*]const f64,
-        c_int,
-        c_int,
-        ?*f64,
-    ) callconv(.c) c_int;
-
-    const ExtractFeaturesFn = *const fn (
-        [*]const f64,
-        c_int,
-        ?[*]f64,
-    ) callconv(.c) c_int;
+    const DtwFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
+    const ShapeDtwFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
+    const DistFn2 = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
+    const SbdFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
+    const CrossCorrFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, ?*c_int, ?*f64) callconv(.c) c_int;
+    const PeltFn = *const fn ([*]const f64, c_int, f64, c_int, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
+    const LcssFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, c_int, ?*f64) callconv(.c) c_int;
+    const ErpFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
+    const TwedFn = *const fn ([*]const f64, c_int, [*]const f64, [*]const f64, c_int, [*]const f64, f64, f64, ?*f64) callconv(.c) c_int;
+    const MatrixProfileFn = *const fn ([*]const f64, c_int, c_int, ?[*]f64, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
+    const MpDistFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
+    const ExtractFeaturesFn = *const fn ([*]const f64, c_int, ?[*]f64) callconv(.c) c_int;
+    const LbKeoghFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
+    const CosineSimilarityFn = *const fn ([*]const f64, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
 };
 
 test "ABI: ts_dtw null dist pointer -> error" {
@@ -509,10 +438,8 @@ test "ABI: ts_dtw null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    const rc = f(&a, 3, &a, 3, 0, null, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw null path_len pointer -> error" {
@@ -520,10 +447,8 @@ test "ABI: ts_dtw null path_len pointer -> error" {
     var dist: f64 = undefined;
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
-
     const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    const rc = f(&a, 3, &a, 3, 0, &dist, &pi, &pj, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0, &dist, &pi, &pj, null, 10) == -1);
 }
 
 test "ABI: ts_dtw null path_i pointer -> error" {
@@ -531,10 +456,8 @@ test "ABI: ts_dtw null path_i pointer -> error" {
     var dist: f64 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    const rc = f(&a, 3, &a, 3, 0, &dist, null, &pj, &plen);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0, &dist, null, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_derivative null dist pointer -> error" {
@@ -542,10 +465,8 @@ test "ABI: ts_dtw_derivative null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw_derivative);
-    const rc = f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_open_end null dist pointer -> error" {
@@ -553,10 +474,8 @@ test "ABI: ts_dtw_open_end null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw_open_end);
-    const rc = f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_shape null dist pointer -> error" {
@@ -564,129 +483,111 @@ test "ABI: ts_dtw_shape null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.ShapeDtwFn = @ptrCast(&abi.ts_dtw_shape);
-    const rc = f(&a, 5, &a, 5, 0, 3, null, &pi, &pj, &plen);
-    try expect(rc == -1);
+    try expect(f(&a, 5, &a, 5, 0, 3, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_soft_dtw null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.DistFn2 = @ptrCast(&abi.ts_soft_dtw);
-
-    const rc = f(&a, 3, &a, 3, 1.0, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 1.0, null) == -1);
 }
 
 test "ABI: ts_cross_correlate null lag pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     var corr: f64 = undefined;
-
     const f: NullTestHelpers.CrossCorrFn = @ptrCast(&abi.ts_cross_correlate);
-    const rc = f(&a, 3, &a, 3, null, &corr);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, null, &corr) == -1);
 }
 
 test "ABI: ts_cross_correlate null corr pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     var lag: c_int = undefined;
-
     const f: NullTestHelpers.CrossCorrFn = @ptrCast(&abi.ts_cross_correlate);
-    const rc = f(&a, 3, &a, 3, &lag, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, &lag, null) == -1);
 }
 
 test "ABI: ts_sbd null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.SbdFn = @ptrCast(&abi.ts_sbd);
-
-    const rc = f(&a, 3, &a, 3, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, null) == -1);
 }
 
 test "ABI: ts_pelt null cps pointer -> error" {
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps_len: c_int = undefined;
-
     const f: NullTestHelpers.PeltFn = @ptrCast(&abi.ts_pelt);
-    const rc = f(&values, 10, 5.0, 2, null, &cps_len);
-    try expect(rc == -1);
+    try expect(f(&values, 10, 5.0, 2, null, &cps_len, 10) == -1);
 }
 
 test "ABI: ts_pelt null cps_len pointer -> error" {
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps: [10]i32 = undefined;
-
     const f: NullTestHelpers.PeltFn = @ptrCast(&abi.ts_pelt);
-    const rc = f(&values, 10, 5.0, 2, &cps, null);
-    try expect(rc == -1);
+    try expect(f(&values, 10, 5.0, 2, &cps, null, 10) == -1);
 }
 
 test "ABI: ts_lcss null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.LcssFn = @ptrCast(&abi.ts_lcss);
-
-    const rc = f(&a, 3, &a, 3, 0.5, 2, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0.5, 2, null) == -1);
 }
 
 test "ABI: ts_edr null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.DistFn2 = @ptrCast(&abi.ts_edr);
-
-    const rc = f(&a, 3, &a, 3, 0.5, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0.5, null) == -1);
 }
 
 test "ABI: ts_erp null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.ErpFn = @ptrCast(&abi.ts_erp);
-
-    const rc = f(&a, 3, &a, 3, 0.0, null);
-    try expect(rc == -1);
+    try expect(f(&a, 3, &a, 3, 0.0, null) == -1);
 }
 
 test "ABI: ts_twed null dist pointer -> error" {
     const v = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
     const f: NullTestHelpers.TwedFn = @ptrCast(&abi.ts_twed);
-
-    const rc = f(&v, 3, &t, &v, 3, &t, 0.5, 0.5, null);
-    try expect(rc == -1);
+    try expect(f(&v, 3, &t, &v, 3, &t, 0.5, 0.5, null) == -1);
 }
 
 test "ABI: ts_matrix_profile null profile pointer -> error" {
     const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var indices: [10]i32 = undefined;
     var plen: c_int = undefined;
-
     const f: NullTestHelpers.MatrixProfileFn = @ptrCast(&abi.ts_matrix_profile);
-    const rc = f(&values, 10, 3, null, &indices, &plen);
-    try expect(rc == -1);
+    try expect(f(&values, 10, 3, null, &indices, &plen, 10) == -1);
 }
 
 test "ABI: ts_matrix_profile null profile_len pointer -> error" {
     const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var profile: [10]f64 = undefined;
     var indices: [10]i32 = undefined;
-
     const f: NullTestHelpers.MatrixProfileFn = @ptrCast(&abi.ts_matrix_profile);
-    const rc = f(&values, 10, 3, &profile, &indices, null);
-    try expect(rc == -1);
+    try expect(f(&values, 10, 3, &profile, &indices, null, 10) == -1);
 }
 
 test "ABI: ts_mp_dist null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     const f: NullTestHelpers.MpDistFn = @ptrCast(&abi.ts_mp_dist);
-
-    const rc = f(&a, 10, &a, 10, 3, null);
-    try expect(rc == -1);
+    try expect(f(&a, 10, &a, 10, 3, null) == -1);
 }
 
 test "ABI: ts_extract_features null features_out pointer -> error" {
     const values = [_]f64{ 1, 2, 3 };
     const f: NullTestHelpers.ExtractFeaturesFn = @ptrCast(&abi.ts_extract_features);
+    try expect(f(&values, 3, null) == -1);
+}
 
-    const rc = f(&values, 3, null);
-    try expect(rc == -1);
+test "ABI: ts_lb_keogh null result pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    const f: NullTestHelpers.LbKeoghFn = @ptrCast(&abi.ts_lb_keogh);
+    try expect(f(&a, 3, &a, 3, 1, null) == -1);
+}
+
+test "ABI: ts_cosine_similarity null result pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    const f: NullTestHelpers.CosineSimilarityFn = @ptrCast(&abi.ts_cosine_similarity);
+    try expect(f(&a, &a, 3, null) == -1);
 }

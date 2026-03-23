@@ -24,9 +24,9 @@ fn validateFinite(ptr: [*]const f64, len: usize) bool {
     return true;
 }
 
-/// Library ABI version. Returns 1.
+/// Library ABI version. Returns 2.
 pub export fn ts_version() callconv(.c) c_int {
-    return 1;
+    return 2;
 }
 
 /// Constrained DTW with Sakoe-Chiba band.
@@ -40,17 +40,21 @@ pub export fn ts_dtw(
     path_i: [*]i32,
     path_j: [*]i32,
     path_len: *c_int,
+    path_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(dist) == 0) return -1;
     if (@intFromPtr(path_i) == 0) return -1;
     if (@intFromPtr(path_j) == 0) return -1;
     if (@intFromPtr(path_len) == 0) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (path_cap < 0) return -1;
     if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return -1;
     var plen: i32 = undefined;
     const rc = dtw.constrainedDTW(abi_allocator, a, a_len, b, b_len, band, dist, path_i, path_j, &plen);
+    if (rc != 0) return rc;
+    if (plen > path_cap) return -1;
     path_len.* = plen;
-    return rc;
+    return 0;
 }
 
 /// Derivative DTW.
@@ -64,17 +68,21 @@ pub export fn ts_dtw_derivative(
     path_i: [*]i32,
     path_j: [*]i32,
     path_len: *c_int,
+    path_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(dist) == 0) return -1;
     if (@intFromPtr(path_i) == 0) return -1;
     if (@intFromPtr(path_j) == 0) return -1;
     if (@intFromPtr(path_len) == 0) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (path_cap < 0) return -1;
     if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return -1;
     var plen: i32 = undefined;
     const rc = dtw.derivativeDTW(abi_allocator, a, a_len, b, b_len, band, dist, path_i, path_j, &plen);
+    if (rc != 0) return rc;
+    if (plen > path_cap) return -1;
     path_len.* = plen;
-    return rc;
+    return 0;
 }
 
 /// Open-end DTW.
@@ -88,17 +96,21 @@ pub export fn ts_dtw_open_end(
     path_i: [*]i32,
     path_j: [*]i32,
     path_len: *c_int,
+    path_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(dist) == 0) return -1;
     if (@intFromPtr(path_i) == 0) return -1;
     if (@intFromPtr(path_j) == 0) return -1;
     if (@intFromPtr(path_len) == 0) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (path_cap < 0) return -1;
     if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return -1;
     var plen: i32 = undefined;
     const rc = dtw.openEndDTW(abi_allocator, a, a_len, b, b_len, band, dist, path_i, path_j, &plen);
+    if (rc != 0) return rc;
+    if (plen > path_cap) return -1;
     path_len.* = plen;
-    return rc;
+    return 0;
 }
 
 /// Shape DTW with local descriptors.
@@ -113,17 +125,21 @@ pub export fn ts_dtw_shape(
     path_i: [*]i32,
     path_j: [*]i32,
     path_len: *c_int,
+    path_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(dist) == 0) return -1;
     if (@intFromPtr(path_i) == 0) return -1;
     if (@intFromPtr(path_j) == 0) return -1;
     if (@intFromPtr(path_len) == 0) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (path_cap < 0) return -1;
     if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return -1;
     var plen: i32 = undefined;
     const rc = dtw.shapeDTW(abi_allocator, a, a_len, b, b_len, band, descriptor_len, dist, path_i, path_j, &plen);
+    if (rc != 0) return rc;
+    if (plen > path_cap) return -1;
     path_len.* = plen;
-    return rc;
+    return 0;
 }
 
 /// Soft DTW (differentiable).
@@ -148,10 +164,13 @@ pub export fn ts_lb_keogh(
     b: [*]const f64,
     b_len: c_int,
     band: c_int,
-) callconv(.c) f64 {
-    if (a_len <= 0 or b_len <= 0) return 0;
-    if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return 0;
-    return dtw.lbKeogh(a, a_len, b, b_len, band);
+    result: *f64,
+) callconv(.c) c_int {
+    if (@intFromPtr(result) == 0) return -1;
+    if (a_len <= 0 or b_len <= 0) return -1;
+    if (!validateFinite(a, @intCast(a_len)) or !validateFinite(b, @intCast(b_len))) return -1;
+    result.* = dtw.lbKeogh(a, a_len, b, b_len, band);
+    return 0;
 }
 
 /// Normalized cross-correlation.
@@ -195,15 +214,19 @@ pub export fn ts_pelt(
     min_size: c_int,
     cps: [*]i32,
     cps_len: *c_int,
+    cps_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(cps) == 0) return -1;
     if (@intFromPtr(cps_len) == 0) return -1;
     if (values_len < 0) return -1;
+    if (cps_cap < 0) return -1;
     if (values_len > 0 and !validateFinite(values, @intCast(values_len))) return -1;
     var clen: i32 = undefined;
     const rc = pelt_mod.pelt(abi_allocator, values, values_len, penalty, min_size, cps, &clen);
+    if (rc != 0) return rc;
+    if (clen > cps_cap) return -1;
     cps_len.* = clen;
-    return rc;
+    return 0;
 }
 
 /// LCSS distance.
@@ -279,16 +302,24 @@ pub export fn ts_matrix_profile(
     profile: [*]f64,
     indices: [*]i32,
     profile_len: *c_int,
+    out_cap: c_int,
 ) callconv(.c) c_int {
     if (@intFromPtr(profile) == 0) return -1;
     if (@intFromPtr(indices) == 0) return -1;
     if (@intFromPtr(profile_len) == 0) return -1;
     if (values_len <= 0) return -1;
+    if (out_cap < 0) return -1;
     if (!validateFinite(values, @intCast(values_len))) return -1;
+    // Pre-check: profile length = values_len - window_len + 1.
+    if (window_len > 0 and values_len >= window_len) {
+        const expected_plen = values_len - window_len + 1;
+        if (expected_plen > out_cap) return -1;
+    }
     var plen: i32 = undefined;
-    const rc = mp.matrixProfile(values, values_len, window_len, profile, indices, &plen);
+    const rc = mp.matrixProfile(abi_allocator, values, values_len, window_len, profile, indices, &plen);
+    if (rc != 0) return rc;
     profile_len.* = plen;
-    return rc;
+    return 0;
 }
 
 /// Matrix Profile distance.
@@ -323,8 +354,11 @@ pub export fn ts_cosine_similarity(
     a: [*]const f64,
     b: [*]const f64,
     len: c_int,
-) callconv(.c) f64 {
-    if (len <= 0) return 0;
-    if (!validateFinite(a, @intCast(len)) or !validateFinite(b, @intCast(len))) return 0;
-    return features.cosineSimilarity(a, b, len);
+    result: *f64,
+) callconv(.c) c_int {
+    if (@intFromPtr(result) == 0) return -1;
+    if (len <= 0) return -1;
+    if (!validateFinite(a, @intCast(len)) or !validateFinite(b, @intCast(len))) return -1;
+    result.* = features.cosineSimilarity(a, b, len);
+    return 0;
 }
