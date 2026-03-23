@@ -83,6 +83,40 @@ test "derivative: too short -> error" {
     try expect(result == error.TooShort);
 }
 
+test "zNormalizeAlloc: returns new array, preserves original" {
+    const allocator = std.testing.allocator;
+    const original = [_]f64{ 1, 2, 3, 4, 5 };
+    const result = try preprocess.zNormalizeAlloc(allocator, &original);
+    defer allocator.free(result);
+
+    // Original should be unchanged.
+    try expectApprox(original[0], 1.0, 1e-10);
+    try expectApprox(original[4], 5.0, 1e-10);
+
+    // Result should be z-normalized (mean=0, stddev=1).
+    var sum: f64 = 0;
+    for (result) |v| sum += v;
+    try expectApprox(sum / 5.0, 0.0, 1e-10);
+
+    var var_sum: f64 = 0;
+    for (result) |v| var_sum += v * v;
+    try expectApprox(@sqrt(var_sum / 5.0), 1.0, 1e-10);
+}
+
+test "baselineCorrectAlloc: returns new array, preserves original" {
+    const allocator = std.testing.allocator;
+    const original = [_]f64{ 10, 10, 10, 10, 10, 10, 10, 10 };
+    const result = try preprocess.baselineCorrectAlloc(allocator, &original, 1.0);
+    defer allocator.free(result);
+
+    // Original should be unchanged.
+    try expectApprox(original[0], 10.0, 1e-10);
+    try expectApprox(original[7], 10.0, 1e-10);
+
+    // Result should be baseline-corrected (near zero for constant series).
+    for (result) |v| try expectApprox(v, 0.0, 1e-10);
+}
+
 test "baseline correct: handles 8193+ points" {
     const page_alloc = std.heap.page_allocator;
     const n: usize = 8193;

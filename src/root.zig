@@ -55,6 +55,10 @@ pub const Store = store.Store;
 pub const ChunkConfig = chunk_storage.ChunkConfig;
 pub const ChunkStorage = chunk_storage.ChunkStorage;
 
+// Re-export key preprocessing functions at top level.
+pub const zNormalizeAlloc = preprocess.zNormalizeAlloc;
+pub const baselineCorrectAlloc = preprocess.baselineCorrectAlloc;
+
 // Pull in the C ABI exports so they are compiled into the shared library.
 pub const abi = @import("abi.zig");
 

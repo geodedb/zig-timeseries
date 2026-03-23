@@ -1,8 +1,8 @@
 # GAP Analysis
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
 
-Repository status: C ABI surface (18 functions) operational, Geode store/chunk-storage ported with Zig 0.15 fixes, **194 tests passing** (174 unit + 10 integration + 10 fuzz/property). Build passes in Debug and ReleaseSafe. **7 gaps closed** this cycle (GAP-0011, GAP-0012, GAP-0013, GAP-0014, GAP-0015, GAP-0020, GAP-0021), **2 won't-do** (GAP-0016, GAP-0017), **1 blocked/deferred** (GAP-0018), **1 architectural won't-do** (G-02), **1 deferred** (GAP-0019). **Batch A** closed S6, Q9, Q14, and added type tests (35 new tests). **Batch D** closed GAP-0014 (fuzz tests) and GAP-0015 (benchmarks).
+Repository status: C ABI surface (18 functions) operational, Geode store/chunk-storage ported with Zig 0.15 fixes, **224 tests passing** (202 unit + 12 integration + 10 fuzz/property). Build passes in Debug, ReleaseSafe, and ReleaseFast. **9 gaps closed** across cycles (GAP-0011, GAP-0012, GAP-0013, GAP-0014, GAP-0015, GAP-0018, GAP-0019, GAP-0020, GAP-0021), **2 won't-do** (GAP-0016, GAP-0017), **1 architectural won't-do** (G-02). **Quick fixes cycle** (2026-03-23) closed Q16 (hardcoded /tmp paths), Q8 (allocating preprocess variants), GAP-0019 (docs), GAP-0018 (e2e tests), S11+S12+S14 (CI hardening).
 
 ## Goal
 
@@ -271,21 +271,20 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Reason:** Design decision -- the Zig ABI uses a single `len` parameter for both vectors in `ts_cosine_similarity`, making length mismatch structurally impossible at the C ABI level. Go-side validation handles the mismatch check before calling into the ABI. This is a deliberate API simplification that eliminates a class of errors by construction.
 
 ### GAP-0018: Missing e2e round-trip store/chunk tests
-- **Status: Partially Closed / Deferred**
+- **Status: Closed** (2026-03-23)
 - **Issue:** [#17](https://gitlab.com/devnw/zig/timeseries/-/issues/17)
 - **Category:** Test
 - **Severity:** Medium
-- **Resolution (partial):** Added 2 integration tests covering write-query round-trip and retention pipeline via ChunkStorage. `tests/integration.zig` now has 10 tests (up from 8). The persistence layer is no longer untested.
-- **Remaining:** Full Geode e2e parity (4 tests from `tests/e2e_timeseries.zig`) deferred. The 2 added tests cover the critical insert->compress->queryRange->verify and retention flows.
-- **Unblock steps:** Port remaining 2 Geode e2e tests covering GQL-integrated flows once query adapter boundary is finalized.
+- **Resolution:** Added 4 integration tests total (2 in previous cycle, 2 in this cycle). `tests/integration.zig` now has 12 tests (up from 8). New tests:
+  - **Store aggregation e2e:** Create store, insert 100 points across 2 series, sampleBy with avg, verify aggregated bucket values.
+  - **Full pipeline e2e:** Insert data -> zNormalizeAlloc (non-mutating) -> extractFeatures -> verify feature vector properties (length, mean~0, stddev~1, positive slope, histogram sums to 1).
 
 ### GAP-0019: Documentation stubs and broken links
-- **Status: Blocked / Deferred**
+- **Status: Closed** (2026-03-23)
 - **Issue:** [#27](https://gitlab.com/devnw/zig/timeseries/-/issues/27)
 - **Category:** Docs
 - **Severity:** Medium
-- **Blocker:** Not completed this cycle. Priority was given to critical security hardening and feature implementation.
-- **Unblock steps:** Add API usage examples to `docs/README.md`, add doc-comments to public functions in `src/store.zig` and `src/chunk_storage.zig`, create a standalone boundary document. Schedule for next documentation cycle.
+- **Resolution:** Verified all links in `docs/README.md` point to existing files (GAP_ANALYSIS.md, REQUIREMENTS.md, QUALITY_GAP_ANALYSIS.md, PERF_GAP_ANALYSIS.md, SECURITY_GAP_ANALYSIS.md, CONTRIBUTING.md, SECURITY.md, CHANGELOG.md). No broken links remain. Updated `examples/basic.zig` from a non-functional placeholder to a comprehensive overview of library capabilities (Store, preprocessing, feature extraction, distance algorithms, PELT segmentation, chunk storage, C ABI).
 
 ### GAP-0020: 8192-point silent limit undocumented
 - **Status: Closed** (2026-03-22)

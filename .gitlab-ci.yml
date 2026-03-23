@@ -4,6 +4,9 @@
 
 include:
   # Security scanning
+  # S12: These component tags should be pinned to immutable commit SHAs for
+  # supply-chain integrity. Requires GitLab API access to resolve tag -> SHA.
+  # Current semver tags are acceptable for now; pin to SHAs when available.
   - component: gitlab.com/devnw/ci-catalog/security-sast@v1.7.1
   - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.7.1
   - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
@@ -21,6 +24,8 @@ include:
 
 variables:
   ZIG_VERSION: "0.15.1"
+  # S11: SHA256 of zig-x86_64-linux-0.15.1.tar.xz from ziglang.org/download/index.json
+  ZIG_SHA256: "c61c5da6edeea14ca51ecd5e4520c6f4189ef5250383db33d01848293bfafe05"
 
 stages:
   - lint
@@ -33,9 +38,11 @@ stages:
 # Zig installation template
 .install-zig: &install-zig
   - apt-get update && apt-get install -y curl xz-utils
-  - curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+  - curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" -o zig.tar.xz
+  # S11: Verify download integrity before extraction.
+  - echo "${ZIG_SHA256}  zig.tar.xz" | sha256sum -c
   - tar -xf zig.tar.xz
-  - export PATH="$PWD/zig-linux-x86_64-${ZIG_VERSION}:$PATH"
+  - export PATH="$PWD/zig-x86_64-linux-${ZIG_VERSION}:$PATH"
   - zig version
 
 # Build job
@@ -81,6 +88,17 @@ test-release-safe:
     - *install-zig
   script:
     - zig build test -Doptimize=ReleaseSafe --summary all
+  needs:
+    - build
+
+# S14: ReleaseFast optimization tests (catches UB that Debug mode masks)
+test-release-fast:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig build test -Doptimize=ReleaseFast --summary all
   needs:
     - build
 

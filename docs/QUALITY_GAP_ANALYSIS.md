@@ -1,12 +1,12 @@
 # Quality Gap Analysis -- timeseries (Zig)
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
 
 ## Summary
 
 **Total findings: 19** (grouped into 17 tracked issues)
 
-**Cycle status (2026-03-22):** 9 findings closed, 1 won't-do, 7 open/deferred
+**Cycle status (2026-03-23):** 11 findings closed, 1 won't-do, 5 open/deferred
 
 | Severity | Count |
 |----------|-------|
@@ -35,13 +35,13 @@ Last updated: 2026-03-22
 | 4 | Q4 | High | 64 | api-contract | C-style signatures for internal functions | dtw.zig, distances.zig, matrix_profile.zig, features.zig, pelt.zig | `[*]const f64` + `i32` len + `*f64` out-params | [#40](https://gitlab.com/devnw/zig/timeseries/-/issues/40) | Create idiomatic Zig API; ABI layer delegates | L | triage |
 | 5 | Q6+Q7 | High | 64 | architecture | Magic 8192 stack buffer; silent failure >8192 pts | preprocess.zig:96-97, features.zig:47, matrix_profile.zig:108 | `var baseline_buf: [8192]f64 = undefined;` / `else return;` | [#42](https://gitlab.com/devnw/zig/timeseries/-/issues/42) | Dynamic alloc fallback; return error instead of silent return | S | **Closed** (2026-03-22). All 3 stack buffers replaced with dynamic allocation via page_allocator. Boundary tests at 8193 points verify correct results. |
 | 6 | Q3 | High | 48 | maintainability | Z-norm distance duplicated 2x in matrix_profile | matrix_profile.zig:30-73, :112-149 | Identical mean/std/z-norm loop in both functions | [#37](https://gitlab.com/devnw/zig/timeseries/-/issues/37) | Extract `zNormDist()` helper | S | **Closed** (2026-03-22). Extracted `zNormDist()` helper in matrix_profile.zig. matrixProfile and mpDist now delegate to the shared function. All 139 unit + 10 integration tests pass. |
-| 7 | Q8 | Medium | 36 | api-contract | zNormalize/baselineCorrect mutate input in-place | preprocess.zig:63, :88 | `for (values) \|*v\| v.* = ...` | [#43](https://gitlab.com/devnw/zig/timeseries/-/issues/43) | Add allocating variants; rename in-place with `Mut` suffix | S | triage |
+| 7 | Q8 | Medium | 36 | api-contract | zNormalize/baselineCorrect mutate input in-place | preprocess.zig:63, :88 | `for (values) \|*v\| v.* = ...` | [#43](https://gitlab.com/devnw/zig/timeseries/-/issues/43) | Add allocating variants; rename in-place with `Mut` suffix | S | **Closed** (2026-03-23). Added `zNormalizeAlloc` and `baselineCorrectAlloc` in preprocess.zig. Both return new allocated slices, preserving originals. Re-exported from root.zig. 2 tests verify immutability of original and correctness of result. |
 | 8 | Q10 | Medium | 36 | architecture | GorillaEncoder prev_ts==0 sentinel; epoch-zero bug | chunk_storage.zig:47-72 | `if (self.prev_ts == 0)` as first-point check | [#49](https://gitlab.com/devnw/zig/timeseries/-/issues/49) | Add `initialized: bool` field | S | **Closed** (2026-03-22). Added `point_count` field to GorillaEncoder; changed first-point detection from `prev_ts==0` to `point_count==0`. Test covers epoch-zero round-trip. |
 | 9 | Q18 | Medium | 36 | docs | docs/README.md links to 5 non-existent pages | docs/README.md:9-13 | `getting-started.md`, `api-reference.md`, etc. missing | [#63](https://gitlab.com/devnw/zig/timeseries/-/issues/63) | Create stubs or remove broken links | S | triage |
 | 10 | Q19 | Medium | 36 | api-contract | Inconsistent error signaling (i32 vs Zig errors vs silent) | dtw.zig, distances.zig, preprocess.zig, features.zig, pelt.zig | Mixed `i32` return codes and `!T` error unions | [#65](https://gitlab.com/devnw/zig/timeseries/-/issues/65) | Standardize on Zig error unions internally | L | **Won't Do** (deferred to v2). ABI-breaking change requiring Go CGO consumer coordination. See also S15/#71. |
 | 11 | Q9 | Medium | 24 | architecture | Store.hashKey 64-bit entropy in 128-bit key | store.zig:88-96 | `(x << 64) \| (x ^ 0x9e3779b97f4a7c15)` | [#46](https://gitlab.com/devnw/zig/timeseries/-/issues/46) | Use 128-bit hash or change key to u64 | S | **Closed** (2026-03-22). Two independent Wyhash seeds (0 and 0x517cc1b727220a95) now produce full 128-bit entropy. Test verifies upper/lower halves are independently derived. |
 | 12 | Q14 | Low | 16 | readability | Feature vector indices are magic numbers | features.zig:96-108 | `features_out[7] = skewness;` | [#55](https://gitlab.com/devnw/zig/timeseries/-/issues/55) | Define `FeatureIndex` enum | S | **Closed** (2026-03-22). Added `FeatureIndex` struct with named constants for all 22 feature positions. `extractFeatures` now uses named indices. 2 tests verify index positions and feature extraction via names. |
-| 13 | Q16 | Low | 16 | tests | ChunkStorage tests use hardcoded /tmp paths | chunk_storage.zig:356, :384 | `"/tmp/ts_test_chunks"` | [#59](https://gitlab.com/devnw/zig/timeseries/-/issues/59) | Use `std.testing.tmpDir` or unique suffix | S | triage |
+| 13 | Q16 | Low | 16 | tests | ChunkStorage tests use hardcoded /tmp paths | chunk_storage.zig:356, :384 | `"/tmp/ts_test_chunks"` | [#59](https://gitlab.com/devnw/zig/timeseries/-/issues/59) | Use `std.testing.tmpDir` or unique suffix | S | **Closed** (2026-03-23). All 8 hardcoded `/tmp/ts_test_*` and `/tmp/ts_integ_*` paths in chunk_storage.zig (6) and integration.zig (2) replaced with PID-suffixed unique paths using `std.os.linux.getpid()`. |
 | 14 | Q17 | Low | 16 | docs | No algorithm reference documentation | dtw.zig, distances.zig, pelt.zig, matrix_profile.zig | No paper citations | [#60](https://gitlab.com/devnw/zig/timeseries/-/issues/60) | Add citations to doc comments | S | triage |
 | 15 | Q11+Q12 | Low | 12 | cleanup | Unused imports in types.zig and distances_test.zig | types.zig:6, distances_test.zig:6 | `const std = @import("std");` unused | [#51](https://gitlab.com/devnw/zig/timeseries/-/issues/51) | Remove unused imports | S | **Closed** (2026-03-22). Removed unused `std` import in types.zig and unused `dtw` import in distances_test.zig. |
 | 16 | Q13 | Low | 12 | readability | store_mod naming inconsistent | root.zig:37 | `pub const store_mod = @import("store.zig");` | [#52](https://gitlab.com/devnw/zig/timeseries/-/issues/52) | Rename to `store` | S | **Closed** (2026-03-22). Renamed `store_mod` to `store` in root.zig. |

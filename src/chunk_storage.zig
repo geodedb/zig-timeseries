@@ -144,30 +144,97 @@ pub const GorillaEncoder = struct {
         self.bit_pos += 1;
     }
 
+    /// Write up to 64 bits at once using direct mask manipulation.
+    /// Bits are written MSB-first: the highest bit of `value` (bit num_bits-1)
+    /// is placed at the current bit_pos, and the lowest bit (bit 0) at
+    /// bit_pos + num_bits - 1.
+    ///
+    /// Performance: Single capacity check for all bits instead of per-bit,
+    /// and direct mask pointer writes without per-bit bounds checking or
+    /// function call overhead.
     fn writeBits(self: *GorillaEncoder, num_bits: u8, value: u64) !void {
-        var i: u8 = num_bits;
-        while (i > 0) : (i -= 1) {
-            const bit: u1 = @intCast((value >> @intCast(i - 1)) & 1);
-            try self.writeBit(bit);
+        if (num_bits == 0) return;
+
+        // Ensure capacity for all bits in one check instead of per-bit.
+        const required = self.bit_pos + num_bits;
+        if (required > self.bits.capacity()) {
+            var new_cap = self.bits.capacity();
+            while (new_cap < required) new_cap *= 2;
+            try self.bits.resize(new_cap, false);
         }
+
+        const masks = self.bits.unmanaged.masks;
+        const mask_bits: u8 = @bitSizeOf(std.DynamicBitSetUnmanaged.MaskInt);
+        const ShiftInt = std.DynamicBitSetUnmanaged.ShiftInt;
+
+        // Write bits directly into the mask words without per-bit capacity
+        // checks. Each bit at position `p` maps to masks[p / mask_bits] at
+        // bit (p % mask_bits). We write MSB-first: bit (num_bits-1) of
+        // value goes to bit_pos, bit 0 goes to bit_pos + num_bits - 1.
+        var bit_idx: u8 = num_bits;
+        var pos = self.bit_pos;
+        while (bit_idx > 0) {
+            const word_idx = pos / mask_bits;
+            const dst_bit: ShiftInt = @intCast(pos % mask_bits);
+            const src_bit: u6 = @intCast(bit_idx - 1);
+            const b: usize = @intCast((value >> src_bit) & 1);
+            masks[word_idx] = (masks[word_idx] & ~(@as(usize, 1) << dst_bit)) | (b << dst_bit);
+            bit_idx -= 1;
+            pos += 1;
+        }
+
+        self.bit_pos = pos;
     }
 
     fn writeRaw(self: *GorillaEncoder, num_bits: u8, value: u64) !void {
         try self.writeBits(num_bits, value);
     }
 
+    /// Extract compressed data as a byte array.
+    ///
+    /// Performance: Reads full words from the internal mask array and
+    /// extracts bytes with bit-reversal, avoiding per-bit isSet() calls
+    /// and their associated bounds checks.
     pub fn getCompressedData(self: *GorillaEncoder, allocator: std.mem.Allocator) ![]u8 {
         const byte_count = (self.bit_pos + 7) / 8;
-        var result = try allocator.alloc(u8, byte_count);
+        const result = try allocator.alloc(u8, byte_count);
 
-        for (0..byte_count) |i| {
-            var byte: u8 = 0;
-            for (0..8) |j| {
-                if (i * 8 + j < self.bit_pos and self.bits.isSet(i * 8 + j)) {
-                    byte |= @as(u8, 1) << @intCast(7 - j);
-                }
+        const masks = self.bits.unmanaged.masks;
+        const mask_bits = @bitSizeOf(std.DynamicBitSetUnmanaged.MaskInt);
+        const bytes_per_word = mask_bits / 8;
+
+        // Process full words: extract bytes directly from each mask word.
+        // Within each word, bits are stored LSB-first (bit 0 = least significant).
+        // Output bytes need MSB-first ordering (bitset position i*8+0 -> byte bit 7).
+        // So each byte is @bitReverse of the corresponding 8 bits in the word.
+        const full_words = byte_count / bytes_per_word;
+        for (0..full_words) |word_idx| {
+            const word = masks[word_idx];
+            const base = word_idx * bytes_per_word;
+            inline for (0..bytes_per_word) |b| {
+                const raw: u8 = @truncate(word >> (b * 8));
+                result[base + b] = @bitReverse(raw);
             }
-            result[i] = byte;
+        }
+
+        // Process remaining bytes that don't fill a complete word.
+        const remaining_start = full_words * bytes_per_word;
+        if (remaining_start < byte_count) {
+            const word = masks[full_words];
+            for (remaining_start..byte_count) |i| {
+                const byte_in_word = i - remaining_start;
+                var raw: u8 = @truncate(word >> @intCast(byte_in_word * 8));
+                // Mask off bits beyond bit_pos for the final byte.
+                if (i == byte_count - 1 and self.bit_pos % 8 != 0) {
+                    const valid_bits: u3 = @intCast(self.bit_pos % 8);
+                    // Only the first `valid_bits` bits of this byte are valid.
+                    // In the raw byte (LSB-first from the word), those are
+                    // the lowest `valid_bits` bits.
+                    const keep_mask: u8 = (@as(u8, 1) << valid_bits) - 1;
+                    raw &= keep_mask;
+                }
+                result[i] = @bitReverse(raw);
+            }
         }
 
         return result;
@@ -539,7 +606,9 @@ pub const ChunkStorage = struct {
 test "chunk_storage: compression and stats" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_chunks";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_chunks_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
@@ -567,7 +636,9 @@ test "chunk_storage: compression and stats" {
 test "chunk_storage: retention" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_retention";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_retention_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
@@ -658,7 +729,9 @@ test "gorilla: encode-decode epoch-zero timestamp" {
 test "chunk_storage: queryRange round-trip" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_query_roundtrip";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_rt_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
@@ -692,7 +765,9 @@ test "chunk_storage: queryRange round-trip" {
 test "chunk_storage: queryRange partial range" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_query_partial";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_pr_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
@@ -719,7 +794,9 @@ test "chunk_storage: queryRange partial range" {
 test "chunk_storage: queryRange nonexistent series" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_query_noexist";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_ne_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
@@ -806,7 +883,9 @@ test "chunk_storage: path traversal with embedded .. rejected" {
 test "chunk_storage: valid path accepted" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_test_valid_path";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_valid_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});

@@ -30,6 +30,12 @@ pub const FeatureIndex = struct {
 /// Features: [0] length, [1] mean, [2] std, [3] min, [4] max, [5] range,
 /// [6] median, [7] skewness, [8] kurtosis, [9] first, [10] last,
 /// [11] slope (linear trend), [12-21] 10-bin histogram of z-normalized values.
+///
+/// Performance: Uses fused loops to minimize cache misses.
+///   Pass 1: sum + min + max (single traversal).
+///   Pass 2: variance + skewness + kurtosis + slope (single traversal, needs mean).
+///   Sort:   median computation (unavoidable O(n log n)).
+///   Pass 3: histogram (needs std_dev from pass 2).
 pub fn extractFeatures(
     allocator: std.mem.Allocator,
     values: [*]const f64,
@@ -41,29 +47,47 @@ pub fn extractFeatures(
 
     const nf: f64 = @floatFromInt(n);
 
-    // Mean.
-    var sum: f64 = 0;
-    for (0..n) |i| sum += values[i];
-    const mean = sum / nf;
-
-    // Variance / StdDev.
-    var var_sum: f64 = 0;
-    for (0..n) |i| {
-        const d = values[i] - mean;
-        var_sum += d * d;
-    }
-    const variance = var_sum / nf;
-    const std_dev = @sqrt(variance);
-
-    // Min / Max.
+    // --- Pass 1: sum, min, max in a single traversal ---
+    var sum: f64 = values[0];
     var min_val: f64 = values[0];
     var max_val: f64 = values[0];
     for (1..n) |i| {
-        if (values[i] < min_val) min_val = values[i];
-        if (values[i] > max_val) max_val = values[i];
+        const v = values[i];
+        sum += v;
+        if (v < min_val) min_val = v;
+        if (v > max_val) max_val = v;
     }
+    const mean = sum / nf;
 
-    // Median (via sorted copy -- dynamically allocated).
+    // --- Pass 2: variance, skewness, kurtosis, slope in a single traversal ---
+    // All of these need the mean computed in pass 1.
+    const i_mean = (nf - 1.0) / 2.0;
+    var var_sum: f64 = 0;
+    var m3: f64 = 0;
+    var m4: f64 = 0;
+    var slope_num: f64 = 0;
+    var slope_den: f64 = 0;
+    for (0..n) |i| {
+        const v = values[i];
+        const d = v - mean;
+        const d2 = d * d;
+        var_sum += d2;
+        m3 += d * d2;
+        m4 += d2 * d2;
+        const fi: f64 = @floatFromInt(i);
+        const di = fi - i_mean;
+        slope_num += di * d;
+        slope_den += di * di;
+    }
+    const variance = var_sum / nf;
+    const std_dev = @sqrt(variance);
+    m3 /= nf;
+    m4 /= nf;
+    const skewness = if (std_dev > 1e-10) m3 / (std_dev * std_dev * std_dev) else 0;
+    const kurtosis = if (std_dev > 1e-10) m4 / (variance * variance) - 3.0 else 0;
+    const slope = if (slope_den > 1e-10) slope_num / slope_den else 0;
+
+    // --- Sort for median (unavoidable separate pass) ---
     const sort_buf = allocator.alloc(f64, n) catch return -1;
     defer allocator.free(sort_buf);
     for (0..n) |i| sort_buf[i] = values[i];
@@ -73,37 +97,10 @@ pub fn extractFeatures(
     else
         (sort_buf[n / 2 - 1] + sort_buf[n / 2]) / 2.0;
 
-    // Skewness and kurtosis.
-    var m3: f64 = 0;
-    var m4: f64 = 0;
-    for (0..n) |i| {
-        const d = values[i] - mean;
-        const d2 = d * d;
-        m3 += d * d2;
-        m4 += d2 * d2;
-    }
-    m3 /= nf;
-    m4 /= nf;
-    const skewness = if (std_dev > 1e-10) m3 / (std_dev * std_dev * std_dev) else 0;
-    const kurtosis = if (std_dev > 1e-10) m4 / (variance * variance) - 3.0 else 0;
-
-    // Linear trend slope: sum((i - i_mean) * (v - v_mean)) / sum((i - i_mean)^2).
-    const i_mean = (nf - 1.0) / 2.0;
-    var num: f64 = 0;
-    var den: f64 = 0;
-    for (0..n) |i| {
-        const fi: f64 = @floatFromInt(i);
-        const di = fi - i_mean;
-        num += di * (values[i] - mean);
-        den += di * di;
-    }
-    const slope = if (den > 1e-10) num / den else 0;
-
-    // 10-bin histogram of z-normalized values (range [-3, 3]).
+    // --- Pass 3: 10-bin histogram of z-normalized values (range [-3, 3]) ---
     var hist: [10]f64 = .{0} ** 10;
     for (0..n) |i| {
         const z = if (std_dev > 1e-10) (values[i] - mean) / std_dev else 0;
-        // Map z in [-3, 3] to bins [0, 9].
         const clamped = @max(-3.0, @min(3.0, z));
         const bin_f = (clamped + 3.0) / 6.0 * 10.0;
         const bin: usize = @min(9, @as(usize, @intFromFloat(bin_f)));

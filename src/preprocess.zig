@@ -122,6 +122,20 @@ pub fn baselineCorrect(allocator: std.mem.Allocator, values: []f64, window_pct: 
     for (0..n) |i| values[i] -= baseline[i];
 }
 
+/// Z-normalize, returning a NEW allocated slice. Caller must free.
+pub fn zNormalizeAlloc(allocator: Allocator, values: []const f64) ![]f64 {
+    const result = try allocator.dupe(f64, values);
+    zNormalize(result);
+    return result;
+}
+
+/// Baseline correct, returning a NEW allocated slice. Caller must free.
+pub fn baselineCorrectAlloc(allocator: Allocator, values: []const f64, window_pct: f64) ![]f64 {
+    const result = try allocator.dupe(f64, values);
+    baselineCorrect(allocator, result, window_pct);
+    return result;
+}
+
 /// Mark gaps in the series where consecutive timestamps differ by more than
 /// `max_interp` seconds. Returns a list of (start_idx, end_idx) pairs.
 /// Caller owns the returned slice.

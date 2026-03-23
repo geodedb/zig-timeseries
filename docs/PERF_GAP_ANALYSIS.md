@@ -1,12 +1,12 @@
 # Performance Gap Analysis -- Zig Timeseries Library
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
 
 ## Summary
 
 **Total findings**: 16 (grouped into 13 issues)
 
-**Cycle status (2026-03-22):** 9 findings closed (P6 -- page_allocator via Q5; Batch C quick wins: softDTW 2-row, LCSS/EDR/ERP/TWED 2-row, LB_Keogh deque, Store.insertMany merge, baselineCorrect prefix sum, PELT segmentCost cache; P13 -- SIMD cosineSimilarity), 6 deferred to performance optimization cycle.
+**Cycle status (2026-03-23):** 12 findings closed (P6 -- page_allocator via Q5; Batch C quick wins: softDTW 2-row, LCSS/EDR/ERP/TWED 2-row, LB_Keogh deque, Store.insertMany merge, baselineCorrect prefix sum, PELT segmentCost cache; P13 -- SIMD cosineSimilarity; P10 -- GorillaEncoder batch writes; P11 -- getCompressedData bulk extraction; P15 -- extractFeatures single-pass), 1 Won't Do (P9 -- matrix profile parallelization), 3 remaining open.
 
 | PerfSeverity | Count | Description |
 |-------------|-------|-------------|
@@ -35,13 +35,13 @@ Last updated: 2026-03-22
 | 6 | P1 | 60 | 22 page_allocator mmap/munmap syscalls | dtw.zig:8, distances.zig:8, pelt.zig:8 | page_alloc used at 22 allocation sites | ~2x for small series | [#50](https://gitlab.com/devnw/zig/timeseries/-/issues/50) | Caller-provided allocator / arena | confirmed | **Closed** (2026-03-22). All internal functions accept std.mem.Allocator param (via Q5/#41). ABI wrappers pass page_allocator. |
 | 7 | P1 | 60 | No benchmarking infrastructure | build.zig (missing bench step) | No bench step, no benchmark files | N/A (infra) | [#58](https://gitlab.com/devnw/zig/timeseries/-/issues/58) | Add bench step + parameterized benchmarks | confirmed | Open |
 | 8 | P1 | 48 | Store.insertMany full re-sort | store.zig:139-170 | pdq sort on entire array after append | ~20x for incremental | [#54](https://gitlab.com/devnw/zig/timeseries/-/issues/54) | Sort batch + merge O(n+k) | confirmed | **Closed** (2026-03-22). Fast-path: if batch is sorted and all timestamps >= last existing, skip full re-sort. Fallback: full pdq sort for unordered/overlapping batches. |
-| 9 | P2 | 48 | Matrix profile parallelization | matrix_profile.zig:26 | Embarrassingly parallel outer loop | Linear with cores (~8x) | [#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70) | Thread pool over row ranges | suspected | Open |
-| 10 | P2 | 36 | GorillaEncoder per-bit writes | chunk_storage.zig:134-148 | writeBit called per bit via DynamicBitSet | ~6x fewer ops | [#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62) | Word-level batch writes | confirmed | Open |
-| 11 | P2 | 36 | getCompressedData bit-by-bit extraction | chunk_storage.zig:154-169 | 8 bit reads per byte output | ~100x with memcpy | [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64) | Direct word buffer memcpy | confirmed | Open |
+| 9 | P2 | 48 | Matrix profile parallelization | matrix_profile.zig:26 | Embarrassingly parallel outer loop | Linear with cores (~8x) | [#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70) | Thread pool over row ranges | suspected | **Won't Do** (2026-03-23). STOMP's sequential QT update (QT[j] = QT_prev[j-1] - ...) creates a data dependency between rows, preventing row-level parallelization. True parallelization requires the SCRIMP++ algorithm, which is a separate implementation effort. |
+| 10 | P2 | 36 | GorillaEncoder per-bit writes | chunk_storage.zig:134-148 | writeBit called per bit via DynamicBitSet | ~6x fewer ops | [#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62) | Word-level batch writes | confirmed | **Closed** (2026-03-23). writeBits now performs a single capacity check for all bits and writes directly to the DynamicBitSet mask array, eliminating per-bit capacity checks and function call overhead. |
+| 11 | P2 | 36 | getCompressedData bit-by-bit extraction | chunk_storage.zig:154-169 | 8 bit reads per byte output | ~100x with memcpy | [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64) | Direct word buffer memcpy | confirmed | **Closed** (2026-03-23). getCompressedData now reads full words from the DynamicBitSet mask array and extracts bytes via @bitReverse, eliminating per-bit isSet() calls. |
 | 12 | P2 | 36 | baselineCorrect O(n*w) sliding window | preprocess.zig:90-122 | Full window re-sum per point | ~w (window size) | [#68](https://gitlab.com/devnw/zig/timeseries/-/issues/68) | Prefix sum O(n) | confirmed | **Closed** (2026-03-22). Replaced inner-loop summation with prefix sum array for O(n) baseline computation. |
 | 13 | P2 | 36 | No SIMD exploitation (0 @Vector uses) | features.zig:122-133 | Scalar f64 reductions on contiguous arrays | 4-8x for vectorizable loops | [#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72) | @Vector(4, f64) for inner loops | suspected | **Closed** (2026-03-22). cosineSimilarity uses @Vector(4, f64) for dot/norm accumulation with scalar remainder loop. |
 | 14 | P2 | 24 | PELT segmentCost called twice per candidate | pelt.zig:79-108 | Same segmentCost(s,t) in optimize + prune | ~1.2-1.5x | [#67](https://gitlab.com/devnw/zig/timeseries/-/issues/67) | Cache cost per candidate | suspected | **Closed** (2026-03-22). Added cost_cache array; optimization loop stores segmentCost, pruning loop reuses it. Falls back to computing for min_size-skipped candidates. |
-| 15 | P3 | 24 | extractFeatures 4+ separate passes | features.zig:25-80 | 6 loops over values array | ~2-3x fewer cache misses | [#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74) | Fuse passes 2-6 into single pass | suspected | Open |
+| 15 | P3 | 24 | extractFeatures 4+ separate passes | features.zig:25-80 | 6 loops over values array | ~2-3x fewer cache misses | [#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74) | Fuse passes 2-6 into single pass | suspected | **Closed** (2026-03-23). Fused 6 loops into 3 passes: pass 1 (sum+min+max), pass 2 (variance+skewness+kurtosis+slope), sort for median, pass 3 (histogram). |
 
 ## Findings by Area
 
@@ -55,13 +55,13 @@ Last updated: 2026-03-22
 | LCSS/EDR/ERP/TWED 2-row | distances.zig | P1 | 64 | **Closed** |
 | LB_Keogh deque | dtw.zig | P1 | 64 | **Closed** |
 | Store.insertMany merge | store.zig | P1 | 48 | **Closed** |
-| Matrix profile parallelization | matrix_profile.zig | P2 | 48 | Open |
-| GorillaEncoder batch writes | chunk_storage.zig | P2 | 36 | Open |
-| getCompressedData memcpy | chunk_storage.zig | P2 | 36 | Open |
+| Matrix profile parallelization | matrix_profile.zig | P2 | 48 | **Won't Do** |
+| GorillaEncoder batch writes | chunk_storage.zig | P2 | 36 | **Closed** |
+| getCompressedData memcpy | chunk_storage.zig | P2 | 36 | **Closed** |
 | baselineCorrect running sum | preprocess.zig | P2 | 36 | **Closed** |
 | SIMD exploitation | features.zig + others | P2 | 36 | **Closed** |
 | PELT segmentCost cache | pelt.zig | P2 | 24 | **Closed** |
-| extractFeatures single-pass | features.zig | P3 | 24 | Open |
+| extractFeatures single-pass | features.zig | P3 | 24 | **Closed** |
 
 ### Infrastructure (build/CI)
 
@@ -93,8 +93,8 @@ These require more design but have confirmed high impact:
 |----------|---------|-------|-------------|---------------|
 | 1 | Benchmarking infrastructure | [#58](https://gitlab.com/devnw/zig/timeseries/-/issues/58) | 2 days | Enables all measurement |
 | ~~2~~ | ~~Replace page_allocator~~ | ~~[#50](https://gitlab.com/devnw/zig/timeseries/-/issues/50)~~ | ~~2 days~~ | **DONE** (2026-03-22, via Q5/#41) |
-| 3 | GorillaEncoder + getCompressedData | [#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62), [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64) | 3 days | 6-100x for compression |
-| 4 | extractFeatures single-pass | [#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74) | 1 day | ~2-3x |
+| ~~3~~ | ~~GorillaEncoder + getCompressedData~~ | ~~[#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62), [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64)~~ | ~~3 days~~ | **DONE** (2026-03-23) |
+| ~~4~~ | ~~extractFeatures single-pass~~ | ~~[#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74)~~ | ~~1 day~~ | **DONE** (2026-03-23) |
 
 ### Strategic (> 5 days each)
 
@@ -104,7 +104,7 @@ These are algorithmic rewrites with the highest absolute impact:
 |----------|---------|-------|-------------|---------------|
 | 1 | STOMP for matrix profile | [#32](https://gitlab.com/devnw/zig/timeseries/-/issues/32) | 5-7 days | 100-260x |
 | ~~2~~ | ~~FFT cross-correlation~~ | ~~[#36](https://gitlab.com/devnw/zig/timeseries/-/issues/36)~~ | ~~5-7 days (FFT impl)~~ | **DONE** (2026-03-22) |
-| 3 | Matrix profile parallelization | [#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70) | 3-5 days (after STOMP) | Linear with cores |
+| ~~3~~ | ~~Matrix profile parallelization~~ | ~~[#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70)~~ | ~~3-5 days (after STOMP)~~ | **Won't Do** (2026-03-23). STOMP's sequential QT dependency prevents row-level parallelization; requires SCRIMP++ algorithm. |
 | 4 | SIMD @Vector exploitation | [#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72) | 3-5 days | 4-8x for inner loops |
 
 ### Recommended Execution Order
@@ -114,7 +114,7 @@ These are algorithmic rewrites with the highest absolute impact:
 3. ~~**Week 2**: Allocator refactor ([#50](https://gitlab.com/devnw/zig/timeseries/-/issues/50))~~ -- **DONE** (2026-03-22, via Q5/#41)
 4. **Week 3-4**: STOMP ([#32](https://gitlab.com/devnw/zig/timeseries/-/issues/32)) -- highest absolute gain
 5. ~~**Week 5-6**: FFT cross-correlation ([#36](https://gitlab.com/devnw/zig/timeseries/-/issues/36))~~ -- **DONE** (2026-03-22)
-6. **Quarter 2**: Parallelization ([#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70)), SIMD ([#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72)), Gorilla compression ([#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62), [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64))
+6. ~~**Quarter 2**: Parallelization ([#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70)), SIMD ([#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72)), Gorilla compression ([#62](https://gitlab.com/devnw/zig/timeseries/-/issues/62), [#64](https://gitlab.com/devnw/zig/timeseries/-/issues/64))~~ -- P70 **Won't Do** (SCRIMP++ needed); P72 **DONE** (2026-03-22); P62+P64 **DONE** (2026-03-23)
 
 ## Unknowns and Blockers
 
@@ -128,7 +128,7 @@ These are algorithmic rewrites with the highest absolute impact:
 
 | Finding | What would confirm it | Issue |
 |---------|----------------------|-------|
-| Matrix profile parallelization | Benchmark with 1,2,4,8 threads showing linear scaling | [#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70) |
+| ~~Matrix profile parallelization~~ | ~~Benchmark with 1,2,4,8 threads showing linear scaling~~ | ~~[#70](https://gitlab.com/devnw/zig/timeseries/-/issues/70)~~ **Won't Do** (2026-03-23) |
 | ~~SIMD @Vector gains~~ | ~~Compare `-OReleaseFast` assembly for cosine_similarity with/without manual @Vector~~ | ~~[#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72)~~ **Closed** (2026-03-22) |
 | ~~PELT segmentCost caching~~ | ~~Benchmark showing measurable wall-clock difference~~ | ~~[#67](https://gitlab.com/devnw/zig/timeseries/-/issues/67)~~ **Closed** (2026-03-22) |
-| extractFeatures single-pass | Benchmark with n=10000 showing cache-miss reduction via perf stat | [#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74) |
+| ~~extractFeatures single-pass~~ | ~~Benchmark with n=10000 showing cache-miss reduction via perf stat~~ | ~~[#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74)~~ **Closed** (2026-03-23) |

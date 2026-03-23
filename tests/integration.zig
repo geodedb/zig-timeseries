@@ -112,7 +112,9 @@ test "integration: ABI version" {
 test "integration: chunk storage write -> queryRange round-trip" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_integ_roundtrip";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_integ_rt_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try lib.ChunkStorage.init(ally, test_dir, .{});
@@ -146,7 +148,9 @@ test "integration: chunk storage write -> queryRange round-trip" {
 test "integration: chunk storage write -> queryRange -> retention" {
     const ally = std.testing.allocator;
 
-    const test_dir = "/tmp/ts_integ_retention";
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_integ_ret_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
 
     var storage = try lib.ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
@@ -183,4 +187,95 @@ test "integration: chunk storage write -> queryRange -> retention" {
     try std.testing.expect(result.len == 2);
     try std.testing.expect(result[0].value == 100);
     try std.testing.expect(result[1].value == 200);
+}
+
+test "integration: store aggregation e2e" {
+    const ally = std.testing.allocator;
+
+    var st = lib.Store.init(ally);
+    defer st.deinit();
+
+    const key_a = lib.SeriesKey{ .device_id = 1, .metric = "cpu" };
+    const key_b = lib.SeriesKey{ .device_id = 2, .metric = "mem" };
+
+    // Insert 50 points into each of 2 series (100 total).
+    var i: i64 = 0;
+    while (i < 50) : (i += 1) {
+        try st.insertMany(key_a, &.{.{ .ts = i * 1000, .value = 10 + @rem(i, 5) }});
+        try st.insertMany(key_b, &.{.{ .ts = i * 1000, .value = 100 + i }});
+    }
+
+    // Verify both series have 50 points.
+    const hk_a = st.hashKey(key_a);
+    const series_a = st.by_key.get(hk_a).?;
+    try std.testing.expect(series_a.len() == 50);
+
+    const hk_b = st.hashKey(key_b);
+    const series_b = st.by_key.get(hk_b).?;
+    try std.testing.expect(series_b.len() == 50);
+
+    // sampleBy with avg on series A: bucket by 10s (10000ms), range [0, 50000).
+    const avg_rows = try st.sampleBy(key_a, 10000, 0, 50000, .avg, ally);
+    defer ally.free(avg_rows);
+
+    // 5 buckets: [0..10s), [10..20s), [20..30s), [30..40s), [40..50s)
+    try std.testing.expect(avg_rows.len == 5);
+
+    // Each bucket has 10 points. Verify all buckets have non-null values.
+    for (avg_rows) |row| {
+        try std.testing.expect(row.value != null);
+    }
+
+    // Verify first bucket avg: points 0..9 have values 10,11,12,13,14,10,11,12,13,14 -> avg=12
+    try std.testing.expect(avg_rows[0].value.? == 12);
+}
+
+test "integration: full pipeline insert -> preprocess -> extractFeatures" {
+    const ally = std.testing.allocator;
+
+    // Step 1: Create raw data (a ramp signal with some noise).
+    var raw_values: [20]f64 = undefined;
+    for (0..20) |i| {
+        const fi: f64 = @floatFromInt(i);
+        raw_values[i] = fi * 2.0 + 1.0; // linear ramp: 1, 3, 5, 7, ...
+    }
+
+    // Step 2: Preprocess with zNormalizeAlloc (non-mutating).
+    const normalized = try lib.preprocess.zNormalizeAlloc(ally, &raw_values);
+    defer ally.free(normalized);
+
+    // Verify original is unchanged.
+    try std.testing.expectApproxEqAbs(raw_values[0], 1.0, 1e-10);
+    try std.testing.expectApproxEqAbs(raw_values[19], 39.0, 1e-10);
+
+    // Verify normalized has mean ~0.
+    var sum: f64 = 0;
+    for (normalized) |v| sum += v;
+    try std.testing.expectApproxEqAbs(sum / 20.0, 0.0, 1e-10);
+
+    // Step 3: Extract features from the normalized series.
+    var feats: [22]f64 = undefined;
+    const rc = lib.features.extractFeatures(ally, normalized.ptr, 20, &feats);
+    try std.testing.expect(rc == 0);
+
+    // Step 4: Verify feature vector properties.
+    // feats[0] = length = 20
+    try std.testing.expectApproxEqAbs(feats[0], 20.0, 1e-10);
+
+    // feats[1] = mean ~ 0 (z-normalized)
+    try std.testing.expectApproxEqAbs(feats[1], 0.0, 1e-6);
+
+    // feats[2] = stddev ~ 1 (z-normalized)
+    try std.testing.expectApproxEqAbs(feats[2], 1.0, 0.05);
+
+    // feats[5] = range = max - min; should be positive
+    try std.testing.expect(feats[5] > 0);
+
+    // feats[11] = slope; for a linear ramp, slope should be positive
+    try std.testing.expect(feats[11] > 0);
+
+    // Histogram bins [12..22] should sum to ~1.0 (normalized histogram).
+    var hist_sum: f64 = 0;
+    for (12..22) |j| hist_sum += feats[j];
+    try std.testing.expectApproxEqAbs(hist_sum, 1.0, 0.05);
 }
