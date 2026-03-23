@@ -3,23 +3,18 @@
 
 //! # timeseries
 //!
-//! A Zig library for timeseries
+//! A Zig library for time-series pattern matching, distance computation,
+//! segmentation, and feature extraction. Exposes a C ABI for consumption
+//! by Go (CGO), Python (ctypes/cffi), or any C-compatible FFI.
 //!
-//! ## Features
+//! ## Modules
 //!
-//! - Feature 1
-//! - Feature 2
-//! - Feature 3
-//!
-//! ## Quick Start
-//!
-//! ```zig
-//! const timeseries = @import("timeseries");
-//!
-//! pub fn main() !void {
-//!     // Your code here
-//! }
-//! ```
+//! - `dtw` -- Dynamic Time Warping variants (constrained, derivative, open-end, shape, soft)
+//! - `distances` -- Cross-correlation, SBD, LCSS, EDR, ERP, TWED
+//! - `matrix_profile` -- Matrix profile and MPDist
+//! - `features` -- 22-element feature extraction and cosine similarity
+//! - `pelt` -- PELT change-point detection
+//! - `types` -- Core data types (PathPoint, Alignment, InvariantSet)
 //!
 //! ## License
 //!
@@ -27,54 +22,58 @@
 
 const std = @import("std");
 
-/// Library version
+/// Library version.
 pub const version = "0.1.0";
 
-// Re-export submodules here as the library grows:
-// pub const submodule = @import("submodule.zig");
+// Re-export submodules.
+pub const types = @import("types.zig");
+pub const dtw = @import("dtw.zig");
+pub const distances = @import("distances.zig");
+pub const matrix_profile = @import("matrix_profile.zig");
+pub const features = @import("features.zig");
+pub const pelt = @import("pelt.zig");
+pub const preprocess = @import("preprocess.zig");
+pub const invariants = @import("invariants.zig");
+pub const store = @import("store.zig");
+pub const chunk_storage = @import("chunk_storage.zig");
 
-// ============================================================================
-// Public Types
-// ============================================================================
+// Re-export core types at top level.
+pub const Gap = types.Gap;
+pub const Segment = types.Segment;
+pub const Evidence = types.Evidence;
+pub const MatchDecision = types.MatchDecision;
+pub const PathPoint = types.PathPoint;
+pub const Alignment = types.Alignment;
+pub const InvariantSet = types.InvariantSet;
 
-/// Example configuration structure
-pub const Config = struct {
-    /// Enable debug output
-    debug: bool = false,
-    /// Maximum retry attempts
-    max_retries: u32 = 3,
-    /// Timeout in milliseconds
-    timeout_ms: u64 = 30_000,
-};
+// Re-export key store types at top level.
+pub const Point = store.Point;
+pub const PointF64 = store.PointF64;
+pub const SeriesKey = store.SeriesKey;
+pub const Series = store.Series;
+pub const Store = store.Store;
+pub const ChunkConfig = chunk_storage.ChunkConfig;
+pub const ChunkStorage = chunk_storage.ChunkStorage;
 
-// ============================================================================
-// Public Functions
-// ============================================================================
-
-/// Initialize the library with the given configuration.
-///
-/// Returns an error if the configuration is invalid.
-pub fn init(config: Config) !void {
-    _ = config;
-    // Implementation here
-}
+// Pull in the C ABI exports so they are compiled into the shared library.
+pub const abi = @import("abi.zig");
 
 // ============================================================================
 // Unit Tests
 // ============================================================================
 
-test "Config default values" {
-    const config = Config{};
-    try std.testing.expectEqual(false, config.debug);
-    try std.testing.expectEqual(@as(u32, 3), config.max_retries);
-    try std.testing.expectEqual(@as(u64, 30_000), config.timeout_ms);
-}
-
-test "init with default config" {
-    try init(.{});
-}
-
 test {
-    // Ensure all declarations are referenced for test coverage
+    // Ensure all declarations are referenced for test coverage.
     std.testing.refAllDecls(@This());
+
+    // Pull in all test files.
+    _ = @import("dtw_test.zig");
+    _ = @import("distances_test.zig");
+    _ = @import("matrix_profile_test.zig");
+    _ = @import("features_test.zig");
+    _ = @import("pelt_test.zig");
+    _ = @import("preprocess_test.zig");
+    _ = @import("invariants_test.zig");
+    _ = @import("abi_test.zig");
+    _ = @import("types_test.zig");
 }

@@ -1,0 +1,817 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2024-2025 CodePros
+
+//! Chunk storage with Gorilla compression for time-series data.
+//! Ported from Geode's chunk_storage.zig with Zig 0.15 API fixes.
+
+const std = @import("std");
+const store = @import("store.zig");
+
+/// Gorilla-inspired compression for time-series data.
+pub const ChunkConfig = struct {
+    max_points_per_chunk: usize = 4096,
+    compression_algorithm: CompressionAlgorithm = .gorilla,
+    retention_days: u32 = 30,
+};
+
+pub const CompressionAlgorithm = enum {
+    none,
+    gorilla,
+    delta_of_delta,
+    zstd,
+};
+
+/// Compressed chunk metadata.
+pub const ChunkMeta = struct {
+    series_id: u64,
+    start_ts: i64,
+    end_ts: i64,
+    num_points: u32,
+    compressed_size: u32,
+    uncompressed_size: u32,
+    compression: CompressionAlgorithm,
+    page_offset: u64,
+};
+
+/// Gorilla compression context.
+pub const GorillaEncoder = struct {
+    bits: std.DynamicBitSet,
+    bit_pos: usize,
+    point_count: usize,
+    prev_ts: i64,
+    prev_delta: i64,
+    prev_value: i64,
+    prev_xor: u64,
+    prev_leading: u8,
+    prev_trailing: u8,
+
+    pub fn init(allocator: std.mem.Allocator) !GorillaEncoder {
+        return .{
+            .bits = try std.DynamicBitSet.initEmpty(allocator, 65536),
+            .bit_pos = 0,
+            .point_count = 0,
+            .prev_ts = 0,
+            .prev_delta = 0,
+            .prev_value = 0,
+            .prev_xor = 0,
+            .prev_leading = 0,
+            .prev_trailing = 0,
+        };
+    }
+
+    pub fn deinit(self: *GorillaEncoder) void {
+        self.bits.deinit();
+    }
+
+    /// Encode a time-series point using Gorilla compression.
+    pub fn encodePoint(self: *GorillaEncoder, point: store.Point) !void {
+        if (self.point_count == 0) {
+            try self.writeRaw(64, @bitCast(point.ts));
+            try self.writeRaw(64, @bitCast(point.value));
+            self.prev_ts = point.ts;
+            self.prev_value = point.value;
+            self.point_count = 1;
+            return;
+        }
+
+        self.point_count += 1;
+
+        // Encode timestamp using delta-of-delta.
+        const delta = point.ts - self.prev_ts;
+        const delta_of_delta = delta - self.prev_delta;
+
+        if (delta_of_delta == 0) {
+            try self.writeBit(0);
+        } else if (delta_of_delta >= -63 and delta_of_delta <= 64) {
+            try self.writeBits(2, 0b10);
+            const v: u64 = @as(u64, @bitCast(@as(i64, delta_of_delta))) & 0x7F;
+            try self.writeBits(7, v);
+        } else if (delta_of_delta >= -255 and delta_of_delta <= 256) {
+            try self.writeBits(3, 0b110);
+            const v: u64 = @as(u64, @bitCast(@as(i64, delta_of_delta))) & 0x1FF;
+            try self.writeBits(9, v);
+        } else if (delta_of_delta >= -2047 and delta_of_delta <= 2048) {
+            try self.writeBits(4, 0b1110);
+            const v: u64 = @as(u64, @bitCast(@as(i64, delta_of_delta))) & 0xFFF;
+            try self.writeBits(12, v);
+        } else {
+            try self.writeBits(4, 0b1111);
+            const v: u64 = @as(u64, @bitCast(@as(i64, delta_of_delta))) & 0xFFFFFFFF;
+            try self.writeBits(32, v);
+        }
+
+        self.prev_delta = delta;
+        self.prev_ts = point.ts;
+
+        // Encode value using XOR compression.
+        const xor: u64 = @bitCast(point.value ^ self.prev_value);
+
+        if (xor == 0) {
+            try self.writeBit(0);
+        } else {
+            try self.writeBit(1);
+
+            const leading = @clz(xor);
+            const trailing = @ctz(xor);
+
+            if (leading >= self.prev_leading and trailing >= self.prev_trailing) {
+                try self.writeBit(0);
+                const significant_bits = 64 - self.prev_leading - self.prev_trailing;
+                const shifted = xor >> @intCast(self.prev_trailing);
+                try self.writeBits(@intCast(significant_bits), shifted);
+            } else {
+                try self.writeBit(1);
+                try self.writeBits(5, leading);
+                const significant_bits = 64 - leading - trailing;
+                try self.writeBits(6, significant_bits);
+                const shifted = xor >> @intCast(trailing);
+                try self.writeBits(@intCast(significant_bits), shifted);
+
+                self.prev_leading = leading;
+                self.prev_trailing = trailing;
+            }
+        }
+
+        self.prev_value = point.value;
+        self.prev_xor = xor;
+    }
+
+    fn writeBit(self: *GorillaEncoder, bit: u1) !void {
+        if (self.bit_pos >= self.bits.capacity()) {
+            try self.bits.resize(self.bits.capacity() * 2, false);
+        }
+        self.bits.setValue(self.bit_pos, bit == 1);
+        self.bit_pos += 1;
+    }
+
+    fn writeBits(self: *GorillaEncoder, num_bits: u8, value: u64) !void {
+        var i: u8 = num_bits;
+        while (i > 0) : (i -= 1) {
+            const bit: u1 = @intCast((value >> @intCast(i - 1)) & 1);
+            try self.writeBit(bit);
+        }
+    }
+
+    fn writeRaw(self: *GorillaEncoder, num_bits: u8, value: u64) !void {
+        try self.writeBits(num_bits, value);
+    }
+
+    pub fn getCompressedData(self: *GorillaEncoder, allocator: std.mem.Allocator) ![]u8 {
+        const byte_count = (self.bit_pos + 7) / 8;
+        var result = try allocator.alloc(u8, byte_count);
+
+        for (0..byte_count) |i| {
+            var byte: u8 = 0;
+            for (0..8) |j| {
+                if (i * 8 + j < self.bit_pos and self.bits.isSet(i * 8 + j)) {
+                    byte |= @as(u8, 1) << @intCast(7 - j);
+                }
+            }
+            result[i] = byte;
+        }
+
+        return result;
+    }
+};
+
+/// Gorilla decompression context -- reverses GorillaEncoder.
+pub const GorillaDecoder = struct {
+    data: []const u8,
+    bit_pos: usize,
+    total_bits: usize,
+    prev_ts: i64,
+    prev_delta: i64,
+    prev_value: i64,
+    prev_leading: u8,
+    prev_trailing: u8,
+    point_count: usize,
+    num_points: u32,
+
+    pub fn init(data: []const u8, num_points: u32) GorillaDecoder {
+        return .{
+            .data = data,
+            .bit_pos = 0,
+            .total_bits = data.len * 8,
+            .prev_ts = 0,
+            .prev_delta = 0,
+            .prev_value = 0,
+            .prev_leading = 0,
+            .prev_trailing = 0,
+            .point_count = 0,
+            .num_points = num_points,
+        };
+    }
+
+    fn readBit(self: *GorillaDecoder) !u1 {
+        if (self.bit_pos >= self.total_bits) return error.EndOfStream;
+        const byte_idx = self.bit_pos / 8;
+        const bit_idx: u3 = @intCast(7 - (self.bit_pos % 8));
+        const bit: u1 = @intCast((self.data[byte_idx] >> bit_idx) & 1);
+        self.bit_pos += 1;
+        return bit;
+    }
+
+    fn readBits(self: *GorillaDecoder, num_bits: u8) !u64 {
+        var value: u64 = 0;
+        for (0..num_bits) |_| {
+            value = (value << 1) | @as(u64, try self.readBit());
+        }
+        return value;
+    }
+
+    /// Sign-extend a value from `bits`-wide to i64.
+    fn signExtend(value: u64, bits: u8) i64 {
+        if (bits == 0 or bits >= 64) return @bitCast(value);
+        const sign_bit: u64 = @as(u64, 1) << @intCast(bits - 1);
+        if (value & sign_bit != 0) {
+            // Negative: fill upper bits with 1s.
+            const mask = @as(u64, std.math.maxInt(u64)) << @intCast(bits);
+            return @bitCast(value | mask);
+        }
+        return @bitCast(value);
+    }
+
+    /// Decode the next point from the compressed bitstream.
+    pub fn decodePoint(self: *GorillaDecoder) !store.Point {
+        if (self.point_count >= self.num_points) return error.EndOfStream;
+
+        if (self.point_count == 0) {
+            // First point: raw 64-bit timestamp + raw 64-bit value.
+            const ts_raw = try self.readBits(64);
+            const val_raw = try self.readBits(64);
+            self.prev_ts = @bitCast(ts_raw);
+            self.prev_value = @bitCast(val_raw);
+            self.point_count = 1;
+            return .{ .ts = self.prev_ts, .value = self.prev_value };
+        }
+
+        self.point_count += 1;
+
+        // Decode timestamp delta-of-delta.
+        var delta_of_delta: i64 = 0;
+        const first_bit = try self.readBit();
+        if (first_bit == 0) {
+            delta_of_delta = 0;
+        } else {
+            const second_bit = try self.readBit();
+            if (second_bit == 0) {
+                // Prefix 10: 7-bit value.
+                const raw = try self.readBits(7);
+                delta_of_delta = signExtend(raw, 7);
+            } else {
+                const third_bit = try self.readBit();
+                if (third_bit == 0) {
+                    // Prefix 110: 9-bit value.
+                    const raw = try self.readBits(9);
+                    delta_of_delta = signExtend(raw, 9);
+                } else {
+                    const fourth_bit = try self.readBit();
+                    if (fourth_bit == 0) {
+                        // Prefix 1110: 12-bit value.
+                        const raw = try self.readBits(12);
+                        delta_of_delta = signExtend(raw, 12);
+                    } else {
+                        // Prefix 1111: 32-bit value.
+                        const raw = try self.readBits(32);
+                        delta_of_delta = signExtend(raw, 32);
+                    }
+                }
+            }
+        }
+
+        const delta = self.prev_delta + delta_of_delta;
+        const ts = self.prev_ts + delta;
+        self.prev_delta = delta;
+        self.prev_ts = ts;
+
+        // Decode value using XOR compression.
+        const xor_control = try self.readBit();
+        var value: i64 = undefined;
+        if (xor_control == 0) {
+            // XOR is 0: same value as previous.
+            value = self.prev_value;
+        } else {
+            const xor_type = try self.readBit();
+            var xor: u64 = undefined;
+            if (xor_type == 0) {
+                // Reuse previous leading/trailing: read significant bits.
+                const significant_bits = 64 - @as(u8, self.prev_leading) - @as(u8, self.prev_trailing);
+                const shifted = try self.readBits(significant_bits);
+                xor = shifted << @intCast(self.prev_trailing);
+            } else {
+                // New leading/trailing.
+                const leading: u8 = @intCast(try self.readBits(5));
+                const significant_bits: u8 = @intCast(try self.readBits(6));
+                const trailing: u8 = 64 - leading - significant_bits;
+                const shifted = try self.readBits(significant_bits);
+                xor = shifted << @intCast(trailing);
+                self.prev_leading = leading;
+                self.prev_trailing = trailing;
+            }
+            value = self.prev_value ^ @as(i64, @bitCast(xor));
+        }
+
+        self.prev_value = value;
+        return .{ .ts = ts, .value = value };
+    }
+
+    /// Decode all points from the compressed bitstream.
+    pub fn decodeAll(self: *GorillaDecoder, allocator: std.mem.Allocator) ![]store.Point {
+        var points: std.ArrayList(store.Point) = .{};
+        errdefer points.deinit(allocator);
+        try points.ensureTotalCapacity(allocator, self.num_points);
+
+        while (self.point_count < self.num_points) {
+            const point = try self.decodePoint();
+            try points.append(allocator, point);
+        }
+
+        return try points.toOwnedSlice(allocator);
+    }
+};
+
+/// Chunk storage manager with filesystem persistence.
+pub const ChunkStorage = struct {
+    allocator: std.mem.Allocator,
+    config: ChunkConfig,
+    chunks: std.ArrayList(ChunkMeta),
+    index: std.AutoHashMap(u64, std.ArrayList(usize)),
+    data_file: ?std.fs.File,
+    data_dir: []const u8,
+
+    pub const InitError = error{InvalidPath};
+
+    pub fn init(allocator: std.mem.Allocator, data_dir: []const u8, config: ChunkConfig) !ChunkStorage {
+        // Reject path traversal attempts.
+        if (std.mem.indexOf(u8, data_dir, "..") != null) return error.InvalidPath;
+
+        std.fs.cwd().makePath(data_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => return err,
+        };
+
+        const chunks_path = try std.fmt.allocPrint(allocator, "{s}/chunks.dat", .{data_dir});
+        defer allocator.free(chunks_path);
+
+        const file = try std.fs.cwd().createFile(chunks_path, .{
+            .read = true,
+            .truncate = false,
+            .mode = 0o600,
+        });
+
+        return .{
+            .allocator = allocator,
+            .config = config,
+            .chunks = .{},
+            .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
+            .data_file = file,
+            .data_dir = try allocator.dupe(u8, data_dir),
+        };
+    }
+
+    pub fn deinit(self: *ChunkStorage) void {
+        var it = self.index.valueIterator();
+        while (it.next()) |vp| {
+            var list = vp.*;
+            list.deinit(self.allocator);
+        }
+        self.index.deinit();
+        self.chunks.deinit(self.allocator);
+        if (self.data_file) |file| {
+            file.close();
+        }
+        self.allocator.free(self.data_dir);
+    }
+
+    /// Write a batch of points to chunks.
+    pub fn writePoints(self: *ChunkStorage, series_id: u64, points: []const store.Point) !void {
+        if (points.len == 0) return;
+
+        var encoder = try GorillaEncoder.init(self.allocator);
+        defer encoder.deinit();
+
+        for (points) |point| {
+            try encoder.encodePoint(point);
+        }
+
+        const compressed = try encoder.getCompressedData(self.allocator);
+        defer self.allocator.free(compressed);
+
+        const meta = ChunkMeta{
+            .series_id = series_id,
+            .start_ts = points[0].ts,
+            .end_ts = points[points.len - 1].ts,
+            .num_points = @intCast(points.len),
+            .compressed_size = @intCast(compressed.len),
+            .uncompressed_size = @intCast(points.len * @sizeOf(store.Point)),
+            .compression = self.config.compression_algorithm,
+            .page_offset = if (self.data_file) |f| try f.getPos() else 0,
+        };
+
+        if (self.data_file) |file| {
+            _ = try file.write(compressed);
+        }
+
+        const chunk_idx = self.chunks.items.len;
+        try self.chunks.append(self.allocator, meta);
+
+        // Update the series index.
+        const gop = try self.index.getOrPut(series_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        try gop.value_ptr.append(self.allocator, chunk_idx);
+    }
+
+    /// Query chunks for a time range.
+    pub fn queryRange(
+        self: *ChunkStorage,
+        series_id: u64,
+        start_ts: i64,
+        end_ts: i64,
+        allocator: std.mem.Allocator,
+    ) ![]store.Point {
+        const list = self.index.get(series_id) orelse return &.{};
+
+        var results: std.ArrayList(store.Point) = .{};
+        errdefer results.deinit(allocator);
+
+        for (list.items) |idx| {
+            const chunk = self.chunks.items[idx];
+            if (chunk.end_ts < start_ts or chunk.start_ts > end_ts) continue;
+
+            // Read compressed data from file.
+            const file = self.data_file orelse continue;
+            const compressed = try allocator.alloc(u8, chunk.compressed_size);
+            defer allocator.free(compressed);
+
+            try file.seekTo(chunk.page_offset);
+            const bytes_read = try file.readAll(compressed);
+            if (bytes_read != chunk.compressed_size) continue;
+
+            // Decompress and filter to requested range.
+            var decoder = GorillaDecoder.init(compressed, chunk.num_points);
+            const points = try decoder.decodeAll(allocator);
+            defer allocator.free(points);
+
+            for (points) |point| {
+                if (point.ts >= start_ts and point.ts <= end_ts) {
+                    try results.append(allocator, point);
+                }
+            }
+        }
+
+        return try results.toOwnedSlice(allocator);
+    }
+
+    /// Run retention policy to prune old chunks.
+    pub fn runRetention(self: *ChunkStorage, current_time: i64) !void {
+        const retention_ms = @as(i64, self.config.retention_days) * 24 * 60 * 60 * 1000;
+        const cutoff_time = current_time - retention_ms;
+
+        var new_chunks: std.ArrayList(ChunkMeta) = .{};
+
+        // Clear index.
+        var it = self.index.valueIterator();
+        while (it.next()) |vp| {
+            var list = vp.*;
+            list.deinit(self.allocator);
+        }
+        self.index.clearAndFree();
+
+        // Rebuild with non-expired chunks.
+        for (self.chunks.items) |chunk| {
+            if (chunk.end_ts >= cutoff_time) {
+                try new_chunks.append(self.allocator, chunk);
+
+                const gop = try self.index.getOrPut(chunk.series_id);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .{};
+                }
+                try gop.value_ptr.append(self.allocator, new_chunks.items.len - 1);
+            }
+        }
+
+        self.chunks.deinit(self.allocator);
+        self.chunks = new_chunks;
+    }
+
+    /// Get compression ratio statistics.
+    pub fn getCompressionStats(self: *ChunkStorage) struct {
+        total_compressed: u64,
+        total_uncompressed: u64,
+        ratio: f64,
+        avg_chunk_size: f64,
+        total_chunks: usize,
+    } {
+        var total_compressed: u64 = 0;
+        var total_uncompressed: u64 = 0;
+
+        for (self.chunks.items) |chunk| {
+            total_compressed += chunk.compressed_size;
+            total_uncompressed += chunk.uncompressed_size;
+        }
+
+        const ratio = if (total_uncompressed > 0)
+            @as(f64, @floatFromInt(total_compressed)) / @as(f64, @floatFromInt(total_uncompressed))
+        else
+            0.0;
+
+        const avg_size = if (self.chunks.items.len > 0)
+            @as(f64, @floatFromInt(total_compressed)) / @as(f64, @floatFromInt(self.chunks.items.len))
+        else
+            0.0;
+
+        return .{
+            .total_compressed = total_compressed,
+            .total_uncompressed = total_uncompressed,
+            .ratio = ratio,
+            .avg_chunk_size = avg_size,
+            .total_chunks = self.chunks.items.len,
+        };
+    }
+};
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+test "chunk_storage: compression and stats" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_chunks";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    var points: std.ArrayList(store.Point) = .{};
+    defer points.deinit(ally);
+
+    var i: i64 = 0;
+    while (i < 100) : (i += 1) {
+        try points.append(ally, .{
+            .ts = 1000 + i * 1000,
+            .value = 100 + @rem(i, 10),
+        });
+    }
+
+    try storage.writePoints(42, points.items);
+
+    const stats = storage.getCompressionStats();
+    try std.testing.expect(stats.total_chunks == 1);
+    try std.testing.expect(stats.ratio < 1.0);
+    try std.testing.expect(stats.total_compressed < stats.total_uncompressed);
+}
+
+test "chunk_storage: retention" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_retention";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
+    defer storage.deinit();
+
+    const current_time: i64 = 1000000000;
+    const day_ms: i64 = 24 * 60 * 60 * 1000;
+
+    try storage.writePoints(1, &[_]store.Point{
+        .{ .ts = current_time - 2 * day_ms, .value = 1 },
+    });
+
+    try storage.writePoints(2, &[_]store.Point{
+        .{ .ts = current_time - 1000, .value = 2 },
+    });
+
+    try std.testing.expect(storage.chunks.items.len == 2);
+
+    try storage.runRetention(current_time);
+
+    try std.testing.expect(storage.chunks.items.len == 1);
+    try std.testing.expect(storage.chunks.items[0].series_id == 2);
+}
+
+test "gorilla: encode-decode round-trip" {
+    const ally = std.testing.allocator;
+
+    var encoder = try GorillaEncoder.init(ally);
+    defer encoder.deinit();
+
+    const input_points = [_]store.Point{
+        .{ .ts = 1000, .value = 100 },
+        .{ .ts = 2000, .value = 200 },
+        .{ .ts = 3000, .value = 150 },
+        .{ .ts = 4000, .value = 300 },
+        .{ .ts = 5000, .value = -50 },
+    };
+
+    for (input_points[0..]) |p| {
+        try encoder.encodePoint(p);
+    }
+
+    const compressed = try encoder.getCompressedData(ally);
+    defer ally.free(compressed);
+
+    var decoder = GorillaDecoder.init(compressed, @intCast(input_points.len));
+    const decoded = try decoder.decodeAll(ally);
+    defer ally.free(decoded);
+
+    try std.testing.expect(decoded.len == input_points.len);
+    for (0..input_points.len) |i| {
+        try std.testing.expect(decoded[i].ts == input_points[i].ts);
+        try std.testing.expect(decoded[i].value == input_points[i].value);
+    }
+}
+
+test "gorilla: encode-decode epoch-zero timestamp" {
+    const ally = std.testing.allocator;
+
+    var encoder = try GorillaEncoder.init(ally);
+    defer encoder.deinit();
+
+    // First point has timestamp=0 (Unix epoch).
+    const input_points = [_]store.Point{
+        .{ .ts = 0, .value = 42 },
+        .{ .ts = 1000, .value = 84 },
+        .{ .ts = 2000, .value = 126 },
+    };
+
+    for (input_points[0..]) |p| {
+        try encoder.encodePoint(p);
+    }
+
+    const compressed = try encoder.getCompressedData(ally);
+    defer ally.free(compressed);
+
+    var decoder = GorillaDecoder.init(compressed, @intCast(input_points.len));
+    const decoded = try decoder.decodeAll(ally);
+    defer ally.free(decoded);
+
+    try std.testing.expect(decoded.len == input_points.len);
+    for (0..input_points.len) |i| {
+        try std.testing.expect(decoded[i].ts == input_points[i].ts);
+        try std.testing.expect(decoded[i].value == input_points[i].value);
+    }
+}
+
+test "chunk_storage: queryRange round-trip" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_query_roundtrip";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    // Write 100 points.
+    var points: std.ArrayList(store.Point) = .{};
+    defer points.deinit(ally);
+
+    var i: i64 = 0;
+    while (i < 100) : (i += 1) {
+        try points.append(ally, .{
+            .ts = 1000 + i * 1000,
+            .value = 100 + @rem(i, 10),
+        });
+    }
+
+    try storage.writePoints(42, points.items);
+
+    // Query for entire range.
+    const result = try storage.queryRange(42, 1000, 100000, ally);
+    defer ally.free(result);
+
+    try std.testing.expect(result.len == 100);
+    for (0..100) |j| {
+        try std.testing.expect(result[j].ts == points.items[j].ts);
+        try std.testing.expect(result[j].value == points.items[j].value);
+    }
+}
+
+test "chunk_storage: queryRange partial range" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_query_partial";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    try storage.writePoints(1, &[_]store.Point{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 4000, .value = 40 },
+        .{ .ts = 5000, .value = 50 },
+    });
+
+    // Query only the middle range [2000, 4000].
+    const result = try storage.queryRange(1, 2000, 4000, ally);
+    defer ally.free(result);
+
+    try std.testing.expect(result.len == 3);
+    try std.testing.expect(result[0].ts == 2000);
+    try std.testing.expect(result[1].ts == 3000);
+    try std.testing.expect(result[2].ts == 4000);
+}
+
+test "chunk_storage: queryRange nonexistent series" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_query_noexist";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    const result = try storage.queryRange(999, 0, 100000, ally);
+    try std.testing.expect(result.len == 0);
+}
+
+test "gorilla: encode-decode large delta values" {
+    const ally = std.testing.allocator;
+
+    var encoder = try GorillaEncoder.init(ally);
+    defer encoder.deinit();
+
+    // Use varying deltas to exercise all delta-of-delta encoding paths.
+    const input_points = [_]store.Point{
+        .{ .ts = 0, .value = 0 },
+        .{ .ts = 1000, .value = 100 }, // delta=1000, dod=1000 (32-bit path)
+        .{ .ts = 2000, .value = 200 }, // delta=1000, dod=0 (zero path)
+        .{ .ts = 2050, .value = 250 }, // delta=50, dod=-950 (32-bit path)
+        .{ .ts = 2100, .value = 300 }, // delta=50, dod=0 (zero path)
+        .{ .ts = 2200, .value = 350 }, // delta=100, dod=50 (7-bit path)
+        .{ .ts = 2500, .value = 400 }, // delta=300, dod=200 (9-bit path)
+        .{ .ts = 4500, .value = 450 }, // delta=2000, dod=1700 (12-bit path)
+    };
+
+    for (input_points[0..]) |p| {
+        try encoder.encodePoint(p);
+    }
+
+    const compressed = try encoder.getCompressedData(ally);
+    defer ally.free(compressed);
+
+    var decoder = GorillaDecoder.init(compressed, @intCast(input_points.len));
+    const decoded = try decoder.decodeAll(ally);
+    defer ally.free(decoded);
+
+    try std.testing.expect(decoded.len == input_points.len);
+    for (0..input_points.len) |j| {
+        try std.testing.expect(decoded[j].ts == input_points[j].ts);
+        try std.testing.expect(decoded[j].value == input_points[j].value);
+    }
+}
+
+test "gorilla: encode-decode single point" {
+    const ally = std.testing.allocator;
+
+    var encoder = try GorillaEncoder.init(ally);
+    defer encoder.deinit();
+
+    try encoder.encodePoint(.{ .ts = 42, .value = -1 });
+
+    const compressed = try encoder.getCompressedData(ally);
+    defer ally.free(compressed);
+
+    var decoder = GorillaDecoder.init(compressed, 1);
+    const decoded = try decoder.decodeAll(ally);
+    defer ally.free(decoded);
+
+    try std.testing.expect(decoded.len == 1);
+    try std.testing.expect(decoded[0].ts == 42);
+    try std.testing.expect(decoded[0].value == -1);
+}
+
+// ============================================================================
+// Security: Path traversal rejection (S8/S9/S10)
+// ============================================================================
+
+test "chunk_storage: path traversal with .. rejected" {
+    const ally = std.testing.allocator;
+
+    const result = ChunkStorage.init(ally, "/tmp/../../../etc/evil", .{});
+    try std.testing.expect(result == error.InvalidPath);
+}
+
+test "chunk_storage: path traversal with embedded .. rejected" {
+    const ally = std.testing.allocator;
+
+    const result = ChunkStorage.init(ally, "/tmp/safe/../../../etc/evil", .{});
+    try std.testing.expect(result == error.InvalidPath);
+}
+
+test "chunk_storage: valid path accepted" {
+    const ally = std.testing.allocator;
+
+    const test_dir = "/tmp/ts_test_valid_path";
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    // If we got here, the valid path was accepted.
+    try std.testing.expect(storage.data_file != null);
+}
