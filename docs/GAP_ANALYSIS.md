@@ -2,7 +2,7 @@
 
 Last updated: 2026-03-23
 
-Repository status: C ABI surface (18 functions) operational, Geode store/chunk-storage ported with Zig 0.15 fixes, **224 tests passing** (202 unit + 12 integration + 10 fuzz/property). Build passes in Debug, ReleaseSafe, and ReleaseFast. **9 gaps closed** across cycles (GAP-0011, GAP-0012, GAP-0013, GAP-0014, GAP-0015, GAP-0018, GAP-0019, GAP-0020, GAP-0021), **2 won't-do** (GAP-0016, GAP-0017), **1 architectural won't-do** (G-02). **Quick fixes cycle** (2026-03-23) closed Q16 (hardcoded /tmp paths), Q8 (allocating preprocess variants), GAP-0019 (docs), GAP-0018 (e2e tests), S11+S12+S14 (CI hardening).
+Repository status: C ABI surface (18 functions) operational, Geode store/chunk-storage ported with Zig 0.15 fixes, **224 tests passing** (202 unit + 12 integration + 10 fuzz/property). Build passes in Debug, ReleaseSafe, and ReleaseFast. **9 gaps closed** across cycles (GAP-0011, GAP-0012, GAP-0013, GAP-0014, GAP-0015, GAP-0018, GAP-0019, GAP-0020, GAP-0021), **2 won't-do** (GAP-0016, GAP-0017), **1 architectural won't-do** (G-02). **Quick fixes cycle** (2026-03-23) closed Q16 (hardcoded /tmp paths), Q8 (allocating preprocess variants), GAP-0019 (docs), GAP-0018 (e2e tests), S11+S12+S14 (CI hardening). **Idiomatic API cycle** (2026-03-23) closed Q4 (idiomatic Zig API), Q19 (consistent error signaling), S2 (bounded slices at ABI boundary) -- all 5 algorithm modules (dtw, distances, matrix_profile, features, pelt) refactored to use `[]const f64` slices, `!` error unions, and result structs.
 
 ## Goal
 

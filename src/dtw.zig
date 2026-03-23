@@ -3,6 +3,11 @@
 
 //! Dynamic Time Warping variants: constrained, derivative, open-end, shape, and soft.
 //!
+//! All public functions use idiomatic Zig signatures:
+//! - Bounded slices (`[]const f64`) instead of raw pointers + length pairs
+//! - Error unions (`!`) instead of integer return codes
+//! - Result structs instead of output pointer parameters
+//!
 //! References:
 //! - Sakoe & Chiba, "Dynamic Programming Algorithm Optimization for Spoken Word Recognition", IEEE Trans. ASSP, 1978.
 //! - Keogh & Ratanamahatana, "Exact indexing of dynamic time warping", KAIS, 2005 (LB_Keogh).
@@ -10,36 +15,33 @@
 
 const std = @import("std");
 const math = std.math;
+const types = @import("types.zig");
+const PathPoint = types.PathPoint;
+const DtwResult = types.DtwResult;
+const TsError = types.TsError;
 
 /// Maximum number of f64 elements allowed in a single allocation (256 MB cap).
 const MAX_ALLOC_ELEMENTS: usize = 256 * 1024 * 1024 / @sizeOf(f64);
 
 /// Walk backward through a DTW cost matrix from (start_i, start_j) choosing the
-/// minimum-cost neighbor at each step. The resulting warp path is written into
-/// path_i/path_j in forward order (start -> end). Returns the path length, or
-/// -1 on allocation failure.
-fn backtrack(
+/// minimum-cost neighbor at each step. Returns the warp path in forward order.
+fn backtrackPath(
     allocator: std.mem.Allocator,
     cost_flat: []const f64,
     m: usize,
     start_i: usize,
     start_j: usize,
-    path_i: [*]i32,
-    path_j: [*]i32,
-) i32 {
+) (TsError || error{OutOfMemory})![]PathPoint {
     const max_path = start_i + start_j + 2;
-    const rev_i = allocator.alloc(i32, max_path) catch return -1;
-    defer allocator.free(rev_i);
-    const rev_j = allocator.alloc(i32, max_path) catch return -1;
-    defer allocator.free(rev_j);
+    const rev = try allocator.alloc(PathPoint, max_path);
+    defer allocator.free(rev);
 
     var pi: usize = start_i;
     var pj: usize = start_j;
     var plen: usize = 0;
 
     while (true) {
-        rev_i[plen] = @intCast(pi);
-        rev_j[plen] = @intCast(pj);
+        rev[plen] = .{ .i = @intCast(pi), .j = @intCast(pj) };
         plen += 1;
         if (pi == 0 and pj == 0) break;
 
@@ -66,39 +68,36 @@ fn backtrack(
         pj = nj;
     }
 
-    // Reverse path into output arrays.
+    // Allocate the result path and reverse into it.
+    const path = try allocator.alloc(PathPoint, plen);
     for (0..plen) |k| {
-        path_i[k] = rev_i[plen - 1 - k];
-        path_j[k] = rev_j[plen - 1 - k];
+        path[k] = rev[plen - 1 - k];
     }
 
-    return @intCast(plen);
+    return path;
 }
 
 /// Constrained DTW with Sakoe-Chiba band.
-/// Returns distance, populates path_i/path_j arrays, sets path_len.
-/// Returns 0 on success, -1 on error.
+///
+/// Returns the DTW distance and the warp path. The caller owns the path
+/// allocation and must free it via `result.deinit(allocator)`.
+///
+/// `band` of 0 means no constraint (full DTW).
 pub fn constrainedDTW(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    band: i32,
-    dist_out: *f64,
-    path_i: [*]i32,
-    path_j: [*]i32,
-    path_len: *i32,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+    a: []const f64,
+    b: []const f64,
+    band: usize,
+) (TsError || error{OutOfMemory})!DtwResult {
+    const n = a.len;
+    const m = b.len;
+    if (n == 0 or m == 0) return TsError.InvalidInput;
 
-    const w: usize = if (band <= 0) @max(n, m) else @intCast(band);
+    const w: usize = if (band == 0) @max(n, m) else band;
 
-    const size = std.math.mul(usize, n, m) catch return -1;
-    if (size > MAX_ALLOC_ELEMENTS) return -1;
-    const cost_flat = allocator.alloc(f64, size) catch return -1;
+    const size = std.math.mul(usize, n, m) catch return TsError.AllocationTooLarge;
+    if (size > MAX_ALLOC_ELEMENTS) return TsError.AllocationTooLarge;
+    const cost_flat = try allocator.alloc(f64, size);
     defer allocator.free(cost_flat);
 
     for (0..n) |i| {
@@ -122,77 +121,53 @@ pub fn constrainedDTW(
         }
     }
 
-    dist_out.* = @sqrt(cost_flat[(n - 1) * m + (m - 1)]);
+    const distance = @sqrt(cost_flat[(n - 1) * m + (m - 1)]);
+    const path = try backtrackPath(allocator, cost_flat, m, n - 1, m - 1);
 
-    // Backtrack to recover the warp path.
-    const plen = backtrack(allocator, cost_flat, m, n - 1, m - 1, path_i, path_j);
-    if (plen < 0) return -1;
-    path_len.* = plen;
-
-    return 0;
+    return DtwResult{
+        .distance = distance,
+        .path = path,
+    };
 }
 
 /// Derivative DTW: computes DTW on first-difference representation.
+///
+/// Requires both input slices to have length >= 2.
 pub fn derivativeDTW(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    band: i32,
-    dist_out: *f64,
-    path_i: [*]i32,
-    path_j: [*]i32,
-    path_len: *i32,
-) i32 {
-    if (a_len < 2 or b_len < 2) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+    a: []const f64,
+    b: []const f64,
+    band: usize,
+) (TsError || error{OutOfMemory})!DtwResult {
+    if (a.len < 2 or b.len < 2) return TsError.InvalidInput;
 
-    const da = allocator.alloc(f64, n - 1) catch return -1;
+    const da = try allocator.alloc(f64, a.len - 1);
     defer allocator.free(da);
-    const db = allocator.alloc(f64, m - 1) catch return -1;
+    const db = try allocator.alloc(f64, b.len - 1);
     defer allocator.free(db);
 
-    for (0..n - 1) |i| da[i] = a[i + 1] - a[i];
-    for (0..m - 1) |i| db[i] = b[i + 1] - b[i];
+    for (0..a.len - 1) |i| da[i] = a[i + 1] - a[i];
+    for (0..b.len - 1) |i| db[i] = b[i + 1] - b[i];
 
-    return constrainedDTW(
-        allocator,
-        da.ptr,
-        @intCast(n - 1),
-        db.ptr,
-        @intCast(m - 1),
-        band,
-        dist_out,
-        path_i,
-        path_j,
-        path_len,
-    );
+    return constrainedDTW(allocator, da, db, band);
 }
 
 /// Open-end DTW: alignment need not reach end of second series.
 pub fn openEndDTW(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    band: i32,
-    dist_out: *f64,
-    path_i: [*]i32,
-    path_j: [*]i32,
-    path_len: *i32,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+    a: []const f64,
+    b: []const f64,
+    band: usize,
+) (TsError || error{OutOfMemory})!DtwResult {
+    const n = a.len;
+    const m = b.len;
+    if (n == 0 or m == 0) return TsError.InvalidInput;
 
-    const w: usize = if (band <= 0) @max(n, m) else @intCast(band);
+    const w: usize = if (band == 0) @max(n, m) else band;
 
-    const size = std.math.mul(usize, n, m) catch return -1;
-    if (size > MAX_ALLOC_ELEMENTS) return -1;
-    const cost_flat = allocator.alloc(f64, size) catch return -1;
+    const size = std.math.mul(usize, n, m) catch return TsError.AllocationTooLarge;
+    if (size > MAX_ALLOC_ELEMENTS) return TsError.AllocationTooLarge;
+    const cost_flat = try allocator.alloc(f64, size);
     defer allocator.free(cost_flat);
 
     for (0..n) |i| {
@@ -226,40 +201,32 @@ pub fn openEndDTW(
         }
     }
 
-    dist_out.* = @sqrt(best_cost);
+    const distance = @sqrt(best_cost);
+    const path = try backtrackPath(allocator, cost_flat, m, n - 1, best_j);
 
-    // Backtrack from (n-1, best_j).
-    const plen = backtrack(allocator, cost_flat, m, n - 1, best_j, path_i, path_j);
-    if (plen < 0) return -1;
-    path_len.* = plen;
-
-    return 0;
+    return DtwResult{
+        .distance = distance,
+        .path = path,
+    };
 }
 
 /// Shape DTW: DTW using local shape descriptors of specified length.
 pub fn shapeDTW(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    band: i32,
-    descriptor_len: i32,
-    dist_out: *f64,
-    path_i: [*]i32,
-    path_j: [*]i32,
-    path_len: *i32,
-) i32 {
-    if (a_len <= 0 or b_len <= 0 or descriptor_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
-    const dlen: usize = @intCast(descriptor_len);
+    a: []const f64,
+    b: []const f64,
+    band: usize,
+    descriptor_len: usize,
+) (TsError || error{OutOfMemory})!DtwResult {
+    const n = a.len;
+    const m = b.len;
+    if (n == 0 or m == 0 or descriptor_len == 0) return TsError.InvalidInput;
 
-    const w: usize = if (band <= 0) @max(n, m) else @intCast(band);
+    const w: usize = if (band == 0) @max(n, m) else band;
 
-    const size = std.math.mul(usize, n, m) catch return -1;
-    if (size > MAX_ALLOC_ELEMENTS) return -1;
-    const cost_flat = allocator.alloc(f64, size) catch return -1;
+    const size = std.math.mul(usize, n, m) catch return TsError.AllocationTooLarge;
+    if (size > MAX_ALLOC_ELEMENTS) return TsError.AllocationTooLarge;
+    const cost_flat = try allocator.alloc(f64, size);
     defer allocator.free(cost_flat);
 
     for (0..n) |i| {
@@ -272,8 +239,8 @@ pub fn shapeDTW(
 
             // Shape descriptor distance: sum of squared diffs in local windows.
             var local_cost: f64 = 0;
-            const half = dlen / 2;
-            for (0..dlen) |k| {
+            const half = descriptor_len / 2;
+            for (0..descriptor_len) |k| {
                 const ai_idx = if (i + k >= half) i + k - half else 0;
                 const bj_idx = if (j + k >= half) j + k - half else 0;
                 const ai_val = if (ai_idx < n) a[ai_idx] else a[n - 1];
@@ -292,14 +259,13 @@ pub fn shapeDTW(
         }
     }
 
-    dist_out.* = @sqrt(cost_flat[(n - 1) * m + (m - 1)]);
+    const distance = @sqrt(cost_flat[(n - 1) * m + (m - 1)]);
+    const path = try backtrackPath(allocator, cost_flat, m, n - 1, m - 1);
 
-    // Backtrack to recover the warp path.
-    const plen = backtrack(allocator, cost_flat, m, n - 1, m - 1, path_i, path_j);
-    if (plen < 0) return -1;
-    path_len.* = plen;
-
-    return 0;
+    return DtwResult{
+        .distance = distance,
+        .path = path,
+    };
 }
 
 /// Soft DTW: differentiable distance using log-sum-exp smoothing.
@@ -307,24 +273,21 @@ pub fn shapeDTW(
 /// the previous row is needed and no backtracking is performed.
 pub fn softDTW(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
+    a: []const f64,
+    b: []const f64,
     gamma: f64,
-    dist_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+) (TsError || error{OutOfMemory})!f64 {
+    const n = a.len;
+    const m = b.len;
+    if (n == 0 or m == 0) return TsError.InvalidInput;
 
     const g = if (gamma > 0) gamma else 1.0;
 
     // 2-row rolling buffer: prev_row holds row i-1, curr_row holds row i.
-    if (m > MAX_ALLOC_ELEMENTS) return -1;
-    const prev_row = allocator.alloc(f64, m) catch return -1;
+    if (m > MAX_ALLOC_ELEMENTS) return TsError.AllocationTooLarge;
+    const prev_row = try allocator.alloc(f64, m);
     defer allocator.free(prev_row);
-    const curr_row = allocator.alloc(f64, m) catch return -1;
+    const curr_row = try allocator.alloc(f64, m);
     defer allocator.free(curr_row);
 
     for (0..n) |i| {
@@ -378,44 +341,36 @@ pub fn softDTW(
         @memcpy(prev_row, curr_row);
     }
 
-    // After the last row iteration, curr_row still holds the final row
-    // (memcpy copies curr into prev, but curr_row is unchanged).
-    dist_out.* = curr_row[m - 1];
-    return 0;
+    // After the last row iteration, curr_row still holds the final row.
+    return curr_row[m - 1];
 }
 
 /// LB_Keogh lower bound on DTW distance.
 /// Uses precomputed upper/lower envelopes via monotonic deques for O(n) time.
+///
+/// This function takes bounded slices and a band width. Returns 0 for empty input.
 pub fn lbKeogh(
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    band: i32,
+    a: []const f64,
+    b: []const f64,
+    band: usize,
 ) f64 {
-    if (a_len < 0 or b_len < 0) return 0;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
-    if (n == 0 or m == 0) return 0;
+    if (a.len == 0 or b.len == 0) return 0;
 
+    const n = a.len;
+    const m = b.len;
     const len = @min(n, m);
-    const w: usize = if (band <= 0) len else @intCast(band);
+    const w: usize = if (band == 0) len else band;
 
     // Precompute upper and lower envelopes for series b using monotonic deques.
-    // The window for index i is b[max(0, i-w) .. min(m, i+w+1)].
-    // Deque stores indices; front is always the extremum for the current window.
-    // Stack-allocate deques as index arrays of length m.
     var upper_deque_buf: [8192]usize = undefined;
     var lower_deque_buf: [8192]usize = undefined;
     const use_stack = (m <= 8192);
 
-    // For the envelope values, also use stack if possible.
     var upper_env_buf: [8192]f64 = undefined;
     var lower_env_buf: [8192]f64 = undefined;
 
     if (!use_stack) {
-        // Fall back to O(n*w) inline computation for very large series
-        // to avoid heap allocation in a function that returns f64 (no error path).
+        // Fall back to O(n*w) inline computation for very large series.
         var lb: f64 = 0;
         for (0..len) |i| {
             const lo = if (i >= w) i - w else 0;
@@ -443,8 +398,6 @@ pub fn lbKeogh(
     const lower_env = lower_env_buf[0..len];
 
     // Monotonic deque for max (upper envelope).
-    // Uses the standard sliding-window-maximum algorithm.
-    // The window for position i is [max(0, i-w), min(m, i+w+1)).
     {
         const dq = upper_deque_buf[0..m];
         var dq_front: usize = 0;
@@ -455,9 +408,7 @@ pub fn lbKeogh(
             const lo = if (i >= w) i - w else 0;
             const hi = @min(i + w + 1, m);
 
-            // Add new elements up to hi-1.
             while (next_add < hi) {
-                // Remove from back while deque back <= new element (for max).
                 while (dq_back > dq_front and b[dq[dq_back - 1]] <= b[next_add]) {
                     dq_back -= 1;
                 }
@@ -466,7 +417,6 @@ pub fn lbKeogh(
                 next_add += 1;
             }
 
-            // Remove expired elements from front.
             while (dq_front < dq_back and dq[dq_front] < lo) {
                 dq_front += 1;
             }

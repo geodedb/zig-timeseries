@@ -91,38 +91,23 @@ test "fuzz: constrainedDTW" {
             if (n == 0 or m == 0) return;
 
             // Skip inputs containing NaN/Inf since the library rejects them.
-            if (!allFinite(pair.a[0..n]) or !allFinite(pair.b[0..m])) return;
+            const a_slice = pair.a[0..n];
+            const b_slice = pair.b[0..m];
+            if (!allFinite(a_slice) or !allFinite(b_slice)) return;
 
-            var dist: f64 = undefined;
-            const path_len = n + m;
-            const pi = allocator.alloc(i32, path_len) catch return;
-            defer allocator.free(pi);
-            const pj = allocator.alloc(i32, path_len) catch return;
-            defer allocator.free(pj);
-            var plen: i32 = undefined;
-
-            const rc = ts.dtw.constrainedDTW(
+            const result = ts.dtw.constrainedDTW(
                 allocator,
-                pair.a.ptr,
-                @intCast(n),
-                pair.b.ptr,
-                @intCast(m),
-                @intCast(@max(n, m)),
-                &dist,
-                pi.ptr,
-                pj.ptr,
-                &plen,
-            );
+                a_slice,
+                b_slice,
+                @max(n, m),
+            ) catch return; // allocation failure is acceptable
 
-            // Must either succeed or return -1 (allocation failure).
-            try std.testing.expect(rc == 0 or rc == -1);
+            defer result.deinit(allocator);
 
-            if (rc == 0) {
-                // Distance must be non-negative.
-                try std.testing.expect(dist >= 0);
-                // Path length must be positive.
-                try std.testing.expect(plen > 0);
-            }
+            // Distance must be non-negative.
+            try std.testing.expect(result.distance >= 0);
+            // Path length must be positive.
+            try std.testing.expect(result.path.len > 0);
         }
     }.testOne, .{});
 }
@@ -137,26 +122,14 @@ test "fuzz: crossCorrelate" {
             const m: usize = @min(pair.b.len, 50);
             if (n == 0 or m == 0) return;
 
-            if (!allFinite(pair.a[0..n]) or !allFinite(pair.b[0..m])) return;
+            const a_slice = pair.a[0..n];
+            const b_slice = pair.b[0..m];
+            if (!allFinite(a_slice) or !allFinite(b_slice)) return;
 
-            var lag: i32 = undefined;
-            var corr: f64 = undefined;
+            const result = ts.distances.crossCorrelate(a_slice, b_slice) catch return;
 
-            const rc = ts.distances.crossCorrelate(
-                pair.a.ptr,
-                @intCast(n),
-                pair.b.ptr,
-                @intCast(m),
-                &lag,
-                &corr,
-            );
-
-            try std.testing.expect(rc == 0 or rc == -1);
-
-            if (rc == 0) {
-                // Correlation should be a finite number.
-                try std.testing.expect(isFinite(corr));
-            }
+            // Correlation should be a finite number.
+            try std.testing.expect(isFinite(result.correlation));
         }
     }.testOne, .{});
 }
@@ -176,25 +149,12 @@ test "fuzz: pelt" {
 
             if (!allFinite(data)) return;
 
-            const cps = allocator.alloc(i32, n) catch return;
+            const cps = ts.pelt.pelt(allocator, data, 5.0, 2) catch return;
             defer allocator.free(cps);
-            var cps_len: i32 = undefined;
 
-            const rc = ts.pelt.pelt(
-                allocator,
-                data.ptr,
-                @intCast(n),
-                5.0,
-                2,
-                cps.ptr,
-                &cps_len,
-            );
-
-            try std.testing.expect(rc == 0 or rc == -1);
-
-            if (rc == 0) {
-                // Change point count must be non-negative.
-                try std.testing.expect(cps_len >= 0);
+            // Change points should have valid indices (< n).
+            for (cps) |cp| {
+                try std.testing.expect(cp < n);
             }
         }
     }.testOne, .{});
@@ -225,51 +185,14 @@ test "property: DTW symmetry" {
         const b = randomF64Array(rand, m);
         defer allocator.free(b);
 
-        const path_cap = n + m;
-        const pi = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pi);
-        const pj = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pj);
-        const pi2 = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pi2);
-        const pj2 = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pj2);
+        const band: usize = @max(n, m);
 
-        var dist_ab: f64 = undefined;
-        var plen_ab: i32 = undefined;
-        var dist_ba: f64 = undefined;
-        var plen_ba: i32 = undefined;
+        const result_ab = ts.dtw.constrainedDTW(allocator, a, b, band) catch continue;
+        defer result_ab.deinit(allocator);
+        const result_ba = ts.dtw.constrainedDTW(allocator, b, a, band) catch continue;
+        defer result_ba.deinit(allocator);
 
-        const band: i32 = @intCast(@max(n, m));
-
-        const rc1 = ts.dtw.constrainedDTW(
-            allocator,
-            a.ptr,
-            @intCast(n),
-            b.ptr,
-            @intCast(m),
-            band,
-            &dist_ab,
-            pi.ptr,
-            pj.ptr,
-            &plen_ab,
-        );
-        const rc2 = ts.dtw.constrainedDTW(
-            allocator,
-            b.ptr,
-            @intCast(m),
-            a.ptr,
-            @intCast(n),
-            band,
-            &dist_ba,
-            pi2.ptr,
-            pj2.ptr,
-            &plen_ba,
-        );
-
-        if (rc1 == 0 and rc2 == 0) {
-            try std.testing.expectApproxEqAbs(dist_ab, dist_ba, 1e-10);
-        }
+        try std.testing.expectApproxEqAbs(result_ab.distance, result_ba.distance, 1e-10);
     }
 }
 
@@ -285,31 +208,10 @@ test "property: DTW non-negativity" {
         const b = randomF64Array(rand, m);
         defer allocator.free(b);
 
-        const path_cap = n + m;
-        const pi = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pi);
-        const pj = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pj);
+        const result = ts.dtw.constrainedDTW(allocator, a, b, @max(n, m)) catch continue;
+        defer result.deinit(allocator);
 
-        var dist: f64 = undefined;
-        var plen: i32 = undefined;
-
-        const rc = ts.dtw.constrainedDTW(
-            allocator,
-            a.ptr,
-            @intCast(n),
-            b.ptr,
-            @intCast(m),
-            @intCast(@max(n, m)),
-            &dist,
-            pi.ptr,
-            pj.ptr,
-            &plen,
-        );
-
-        if (rc == 0) {
-            try std.testing.expect(dist >= 0);
-        }
+        try std.testing.expect(result.distance >= 0);
     }
 }
 
@@ -322,31 +224,10 @@ test "property: DTW identity" {
         const a = randomF64Array(rand, n);
         defer allocator.free(a);
 
-        const path_cap = n * 2;
-        const pi = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pi);
-        const pj = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pj);
+        const result = ts.dtw.constrainedDTW(allocator, a, a, n) catch continue;
+        defer result.deinit(allocator);
 
-        var dist: f64 = undefined;
-        var plen: i32 = undefined;
-
-        const rc = ts.dtw.constrainedDTW(
-            allocator,
-            a.ptr,
-            @intCast(n),
-            a.ptr,
-            @intCast(n),
-            @intCast(n),
-            &dist,
-            pi.ptr,
-            pj.ptr,
-            &plen,
-        );
-
-        if (rc == 0) {
-            try std.testing.expectApproxEqAbs(dist, 0.0, 1e-10);
-        }
+        try std.testing.expectApproxEqAbs(result.distance, 0.0, 1e-10);
     }
 }
 
@@ -361,36 +242,15 @@ test "property: LB_Keogh <= DTW" {
         const b = randomF64Array(rand, n);
         defer allocator.free(b);
 
-        const band: i32 = @intCast(@max(1, n / 3));
+        const band: usize = @max(1, n / 3);
 
-        const lb = ts.dtw.lbKeogh(a.ptr, @intCast(n), b.ptr, @intCast(n), band);
+        const lb = ts.dtw.lbKeogh(a, b, band);
 
-        const path_cap = n * 2;
-        const pi = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pi);
-        const pj = allocator.alloc(i32, path_cap) catch continue;
-        defer allocator.free(pj);
+        const result = ts.dtw.constrainedDTW(allocator, a, b, band) catch continue;
+        defer result.deinit(allocator);
 
-        var dtw_dist: f64 = undefined;
-        var plen: i32 = undefined;
-
-        const rc = ts.dtw.constrainedDTW(
-            allocator,
-            a.ptr,
-            @intCast(n),
-            b.ptr,
-            @intCast(n),
-            band,
-            &dtw_dist,
-            pi.ptr,
-            pj.ptr,
-            &plen,
-        );
-
-        if (rc == 0) {
-            // LB_Keogh must be a lower bound on DTW.
-            try std.testing.expect(lb <= dtw_dist + 1e-10);
-        }
+        // LB_Keogh must be a lower bound on DTW.
+        try std.testing.expect(lb <= result.distance + 1e-10);
     }
 }
 
@@ -407,18 +267,12 @@ test "property: ERP triangle inequality" {
         const c = randomF64Array(rand, n);
         defer allocator.free(c);
 
-        var dist_ab: f64 = undefined;
-        var dist_bc: f64 = undefined;
-        var dist_ac: f64 = undefined;
+        const dist_ab = ts.distances.erp(allocator, a, b, 0.0) catch continue;
+        const dist_bc = ts.distances.erp(allocator, b, c, 0.0) catch continue;
+        const dist_ac = ts.distances.erp(allocator, a, c, 0.0) catch continue;
 
-        const r1 = ts.distances.erp(allocator, a.ptr, @intCast(n), b.ptr, @intCast(n), 0.0, &dist_ab);
-        const r2 = ts.distances.erp(allocator, b.ptr, @intCast(n), c.ptr, @intCast(n), 0.0, &dist_bc);
-        const r3 = ts.distances.erp(allocator, a.ptr, @intCast(n), c.ptr, @intCast(n), 0.0, &dist_ac);
-
-        if (r1 == 0 and r2 == 0 and r3 == 0) {
-            // Triangle inequality: d(a,c) <= d(a,b) + d(b,c)
-            try std.testing.expect(dist_ac <= dist_ab + dist_bc + 1e-10);
-        }
+        // Triangle inequality: d(a,c) <= d(a,b) + d(b,c)
+        try std.testing.expect(dist_ac <= dist_ab + dist_bc + 1e-10);
     }
 }
 
@@ -433,18 +287,11 @@ test "property: distance symmetry (crossCorrelate)" {
         const b = randomF64Array(rand, n);
         defer allocator.free(b);
 
-        var lag_ab: i32 = undefined;
-        var corr_ab: f64 = undefined;
-        var lag_ba: i32 = undefined;
-        var corr_ba: f64 = undefined;
+        const r_ab = ts.distances.crossCorrelate(a, b) catch continue;
+        const r_ba = ts.distances.crossCorrelate(b, a) catch continue;
 
-        const r1 = ts.distances.crossCorrelate(a.ptr, @intCast(n), b.ptr, @intCast(n), &lag_ab, &corr_ab);
-        const r2 = ts.distances.crossCorrelate(b.ptr, @intCast(n), a.ptr, @intCast(n), &lag_ba, &corr_ba);
-
-        if (r1 == 0 and r2 == 0) {
-            // Cross-correlation value should be the same (but lag may be negated).
-            try std.testing.expectApproxEqAbs(corr_ab, corr_ba, 1e-10);
-        }
+        // Cross-correlation value should be the same (but lag may be negated).
+        try std.testing.expectApproxEqAbs(r_ab.correlation, r_ba.correlation, 1e-10);
     }
 }
 
@@ -457,25 +304,12 @@ test "property: PELT no crash on random data" {
         const data = randomF64Array(rand, n);
         defer allocator.free(data);
 
-        const cps = allocator.alloc(i32, n) catch continue;
+        const cps = ts.pelt.pelt(allocator, data, 5.0, 2) catch continue;
         defer allocator.free(cps);
-        var cps_len: i32 = undefined;
 
-        const rc = ts.pelt.pelt(
-            allocator,
-            data.ptr,
-            @intCast(n),
-            5.0,
-            2,
-            cps.ptr,
-            &cps_len,
-        );
-
-        // Must succeed (0) or cleanly fail (-1); never crash.
-        try std.testing.expect(rc == 0 or rc == -1);
-
-        if (rc == 0) {
-            try std.testing.expect(cps_len >= 0);
+        // All change points must be valid indices (< n).
+        for (cps) |cp| {
+            try std.testing.expect(cp < n);
         }
     }
 }

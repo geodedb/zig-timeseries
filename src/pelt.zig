@@ -3,43 +3,46 @@
 
 //! PELT (Pruned Exact Linear Time) change-point detection.
 //!
+//! All public functions use idiomatic Zig signatures:
+//! - Bounded slices (`[]const f64`) instead of raw pointers + length pairs
+//! - Error unions (`!`) instead of integer return codes
+//! - Returned owned slices instead of output pointer parameters
+//!
 //! Reference: Killick et al., "Optimal Detection of Changepoints with a Linear Computational Cost", JASA, 2012.
 
 const std = @import("std");
 const math = std.math;
+const types = @import("types.zig");
+const TsError = types.TsError;
 
 /// PELT change-point detection.
 ///
 /// Detects change points in `values` using a Gaussian cost model
 /// with the given `penalty` and `min_size` constraint.
-/// Writes change-point indices into `cps_out` and sets `cps_len_out`.
-/// Returns 0 on success, -1 on error.
+///
+/// Returns an owned slice of change-point indices. The caller must
+/// free the slice via `allocator.free(result)`.
 pub fn pelt(
     allocator: std.mem.Allocator,
-    values: [*]const f64,
-    values_len: i32,
+    values: []const f64,
     penalty: f64,
-    min_size: i32,
-    cps_out: [*]i32,
-    cps_len_out: *i32,
-) i32 {
-    if (values_len < 0) return -1;
-    const n: usize = @intCast(values_len);
-    const ms: usize = @intCast(@max(1, min_size));
+    min_size: usize,
+) (TsError || error{OutOfMemory})![]usize {
+    const n = values.len;
+    const ms: usize = @max(1, min_size);
+
     if (n == 0) {
-        cps_len_out.* = 0;
-        return 0;
+        return allocator.alloc(usize, 0);
     }
 
     if (n < ms * 2) {
-        cps_len_out.* = 0;
-        return 0;
+        return allocator.alloc(usize, 0);
     }
 
     // Cumulative sum and sum-of-squares for O(1) segment cost.
-    const cum_sum = allocator.alloc(f64, n + 1) catch return -1;
+    const cum_sum = try allocator.alloc(f64, n + 1);
     defer allocator.free(cum_sum);
-    const cum_sq = allocator.alloc(f64, n + 1) catch return -1;
+    const cum_sq = try allocator.alloc(f64, n + 1);
     defer allocator.free(cum_sq);
 
     cum_sum[0] = 0;
@@ -61,9 +64,9 @@ pub fn pelt(
     }.cost;
 
     // Optimal cost F[t] and last change point before t.
-    const f_buf = allocator.alloc(f64, n + 1) catch return -1;
+    const f_buf = try allocator.alloc(f64, n + 1);
     defer allocator.free(f_buf);
-    const cp_buf = allocator.alloc(usize, n + 1) catch return -1;
+    const cp_buf = try allocator.alloc(usize, n + 1);
     defer allocator.free(cp_buf);
 
     f_buf[0] = -penalty;
@@ -73,13 +76,13 @@ pub fn pelt(
     }
 
     // Candidate set for pruning.
-    const candidates = allocator.alloc(usize, n + 1) catch return -1;
+    const candidates = try allocator.alloc(usize, n + 1);
     defer allocator.free(candidates);
     var num_candidates: usize = 1;
     candidates[0] = 0;
 
-    // Cache for segmentCost values per candidate, reused in pruning.
-    const cost_cache = allocator.alloc(f64, n + 1) catch return -1;
+    // Cache for segmentCost values per candidate.
+    const cost_cache = try allocator.alloc(f64, n + 1);
     defer allocator.free(cost_cache);
 
     for (ms..n + 1) |t| {
@@ -106,13 +109,9 @@ pub fn pelt(
         cp_buf[t] = best_cp;
 
         // Pruning: remove candidates that can never be optimal.
-        // Reuse cached segmentCost values from the optimization loop when available.
         var new_count: usize = 0;
         for (0..num_candidates) |ci| {
             const s = candidates[ci];
-            // Use cached cost if it was computed; otherwise compute it now.
-            // Candidates with t < s + ms were skipped in optimization but still
-            // need segmentCost for the pruning check.
             const seg_cost = if (cost_cache[ci] < math.inf(f64))
                 cost_cache[ci]
             else
@@ -127,20 +126,21 @@ pub fn pelt(
     }
 
     // Backtrace change points.
-    const result = allocator.alloc(i32, n) catch return -1;
-    defer allocator.free(result);
+    const result_tmp = try allocator.alloc(usize, n);
+    defer allocator.free(result_tmp);
     var result_len: usize = 0;
     var pos: usize = n;
     while (pos > 0 and cp_buf[pos] > 0) {
-        result[result_len] = @intCast(cp_buf[pos]);
+        result_tmp[result_len] = cp_buf[pos];
         result_len += 1;
         pos = cp_buf[pos];
     }
 
     // Reverse into output.
+    const result = try allocator.alloc(usize, result_len);
     for (0..result_len) |i| {
-        cps_out[i] = result[result_len - 1 - i];
+        result[i] = result_tmp[result_len - 1 - i];
     }
-    cps_len_out.* = @intCast(result_len);
-    return 0;
+
+    return result;
 }

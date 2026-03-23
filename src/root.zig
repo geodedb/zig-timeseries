@@ -45,6 +45,10 @@ pub const MatchDecision = types.MatchDecision;
 pub const PathPoint = types.PathPoint;
 pub const Alignment = types.Alignment;
 pub const InvariantSet = types.InvariantSet;
+pub const DtwResult = types.DtwResult;
+pub const CorrelationResult = types.CorrelationResult;
+pub const MatrixProfileResult = types.MatrixProfileResult;
+pub const TsError = types.TsError;
 
 // Re-export key store types at top level.
 pub const Point = store.Point;

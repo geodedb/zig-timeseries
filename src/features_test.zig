@@ -8,10 +8,8 @@ const expectApprox = std.testing.expectApproxEqAbs;
 
 test "extract features: basic 22-element vector" {
     const values = [_]f64{ 1, 2, 3, 4, 5 };
-    var feats: [22]f64 = undefined;
 
-    const rc = features.extractFeatures(std.testing.allocator, &values, 5, &feats);
-    try expect(rc == 0);
+    const feats = try features.extractFeatures(std.testing.allocator, &values);
 
     // Check known features.
     try expectApprox(feats[0], 5.0, 1e-10); // length
@@ -27,41 +25,39 @@ test "extract features: basic 22-element vector" {
 }
 
 test "extract features: empty series -> error" {
-    const values = [_]f64{1};
-    var feats: [22]f64 = undefined;
+    const empty: []const f64 = &.{};
 
-    const rc = features.extractFeatures(std.testing.allocator, &values, 0, &feats);
-    try expect(rc == -1);
+    const result = features.extractFeatures(std.testing.allocator, empty);
+    try expect(result == error.InvalidInput);
 }
 
 test "cosine similarity: identical vectors -> 1.0" {
     const a = [_]f64{ 1, 2, 3 };
-    const sim = features.cosineSimilarity(&a, &a, 3);
+    const sim = features.cosineSimilarity(&a, &a);
     try expectApprox(sim, 1.0, 1e-10);
 }
 
 test "cosine similarity: orthogonal vectors -> 0.0" {
     const a = [_]f64{ 1, 0, 0 };
     const b = [_]f64{ 0, 1, 0 };
-    const sim = features.cosineSimilarity(&a, &b, 3);
+    const sim = features.cosineSimilarity(&a, &b);
     try expectApprox(sim, 0.0, 1e-10);
 }
 
 test "cosine similarity: empty vectors -> 0.0" {
+    const empty: []const f64 = &.{};
     const a = [_]f64{1};
-    const sim = features.cosineSimilarity(&a, &a, 0);
+    const sim = features.cosineSimilarity(empty, &a);
     try expectApprox(sim, 0.0, 1e-10);
 }
 
 test "extract features + cosine similarity: end-to-end" {
     const values = [_]f64{ 1, 2, 3, 4, 5 };
-    var feats_a: [22]f64 = undefined;
-    var feats_b: [22]f64 = undefined;
 
-    _ = features.extractFeatures(std.testing.allocator, &values, 5, &feats_a);
-    _ = features.extractFeatures(std.testing.allocator, &values, 5, &feats_b);
+    const feats_a = try features.extractFeatures(std.testing.allocator, &values);
+    const feats_b = try features.extractFeatures(std.testing.allocator, &values);
 
-    const sim = features.cosineSimilarity(&feats_a, &feats_b, 22);
+    const sim = features.cosineSimilarity(&feats_a, &feats_b);
     try expectApprox(sim, 1.0, 1e-10);
 }
 
@@ -71,14 +67,9 @@ test "extract features: handles 8193+ points" {
     const values = try page_alloc.alloc(f64, n);
     defer page_alloc.free(values);
 
-    // Fill with a linear ramp: 1, 2, 3, ..., n.
     for (0..n) |i| values[i] = @as(f64, @floatFromInt(i + 1));
 
-    var feats: [22]f64 = undefined;
-    const rc = features.extractFeatures(std.testing.allocator, values.ptr, @intCast(n), &feats);
-
-    // Should succeed (not -1).
-    try expect(rc == 0);
+    const feats = try features.extractFeatures(std.testing.allocator, values);
 
     // Verify length feature.
     try expectApprox(feats[0], @as(f64, @floatFromInt(n)), 1e-10);
@@ -93,20 +84,18 @@ test "extract features: handles 8193+ points" {
 }
 
 // ============================================================================
-// Security: Negative length guards (GAP-0021/S1)
+// Security: Empty input guards (idiomatic Zig error unions)
 // ============================================================================
 
-test "extract features: negative length -> error" {
-    const values = [_]f64{ 1, 2, 3 };
-    var feats: [22]f64 = undefined;
-
-    const rc = features.extractFeatures(std.testing.allocator, &values, -1, &feats);
-    try expect(rc == -1);
+test "extract features: both slices empty -> error" {
+    const empty: []const f64 = &.{};
+    const result = features.extractFeatures(std.testing.allocator, empty);
+    try expect(result == error.InvalidInput);
 }
 
-test "cosine similarity: negative length -> 0" {
-    const a = [_]f64{ 1, 2, 3 };
-    const sim = features.cosineSimilarity(&a, &a, -1);
+test "cosine similarity: both empty -> 0" {
+    const empty: []const f64 = &.{};
+    const sim = features.cosineSimilarity(empty, empty);
     try expectApprox(sim, 0.0, 1e-10);
 }
 
@@ -134,10 +123,8 @@ test "FeatureIndex: named indices match expected positions" {
 
 test "FeatureIndex: extractFeatures populates named positions correctly" {
     const values = [_]f64{ 1, 2, 3, 4, 5 };
-    var feats: [features.FeatureIndex.feature_count]f64 = undefined;
 
-    const rc = features.extractFeatures(std.testing.allocator, &values, 5, &feats);
-    try expect(rc == 0);
+    const feats = try features.extractFeatures(std.testing.allocator, &values);
 
     // Verify via named indices.
     try expectApprox(feats[features.FeatureIndex.length], 5.0, 1e-10);

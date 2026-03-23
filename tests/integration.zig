@@ -21,49 +21,38 @@ test "integration: DTW -> feature extraction pipeline" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
     const b = [_]f64{ 1.5, 2.5, 3.5, 4.5, 5.5 };
 
-    // DTW distance.
-    var dist: f64 = undefined;
-    var pi: [10]i32 = undefined;
-    var pj: [10]i32 = undefined;
-    var plen: i32 = undefined;
-    const rc = lib.dtw.constrainedDTW(std.testing.allocator, &a, 5, &b, 5, 2, &dist, &pi, &pj, &plen);
-    try std.testing.expect(rc == 0);
-    try std.testing.expect(dist > 0);
+    // DTW distance (idiomatic Zig API with bounded slices).
+    const result = try lib.dtw.constrainedDTW(std.testing.allocator, &a, &b, 2);
+    defer result.deinit(std.testing.allocator);
+    try std.testing.expect(result.distance > 0);
 
-    // Feature extraction.
-    var feats_a: [22]f64 = undefined;
-    var feats_b: [22]f64 = undefined;
-    try std.testing.expect(lib.features.extractFeatures(std.testing.allocator, &a, 5, &feats_a) == 0);
-    try std.testing.expect(lib.features.extractFeatures(std.testing.allocator, &b, 5, &feats_b) == 0);
+    // Feature extraction (idiomatic Zig API with bounded slices).
+    const feats_a = try lib.features.extractFeatures(std.testing.allocator, &a);
+    const feats_b = try lib.features.extractFeatures(std.testing.allocator, &b);
 
     // Cosine similarity between feature vectors should be high.
-    const sim = lib.features.cosineSimilarity(&feats_a, &feats_b, 22);
+    const sim = lib.features.cosineSimilarity(&feats_a, &feats_b);
     try std.testing.expect(sim > 0.9);
 }
 
 test "integration: PELT segmentation -> DTW on segments" {
     // Create a series with two distinct segments.
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
-    var cps: [10]i32 = undefined;
-    var cps_len: i32 = undefined;
 
-    const rc = lib.pelt.pelt(std.testing.allocator, &values, 10, 5.0, 2, &cps, &cps_len);
-    try std.testing.expect(rc == 0);
-    try std.testing.expect(cps_len >= 1);
+    const changepoints = try lib.pelt.pelt(std.testing.allocator, &values, 5.0, 2);
+    defer std.testing.allocator.free(changepoints);
+    try std.testing.expect(changepoints.len >= 1);
 }
 
 test "integration: cross-correlation -> SBD" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
 
-    // Cross-correlate with self.
-    var lag: i32 = undefined;
-    var corr: f64 = undefined;
-    try std.testing.expect(lib.distances.crossCorrelate(&a, 5, &a, 5, &lag, &corr) == 0);
-    try std.testing.expect(lag == 0);
+    // Cross-correlate with self (idiomatic Zig API with bounded slices).
+    const cc_result = try lib.distances.crossCorrelate(&a, &a);
+    try std.testing.expect(cc_result.lag == 0);
 
     // SBD with self should be 0.
-    var sbd_dist: f64 = undefined;
-    try std.testing.expect(lib.distances.sbd(&a, 5, &a, 5, &sbd_dist) == 0);
+    const sbd_dist = try lib.distances.sbd(&a, &a);
     try std.testing.expectApproxEqAbs(sbd_dist, 0.0, 1e-10);
 }
 
@@ -71,15 +60,12 @@ test "integration: LB_Keogh bounds DTW" {
     const a = [_]f64{ 1, 3, 5, 2, 4 };
     const b = [_]f64{ 2, 4, 1, 3, 5 };
 
-    const lb = lib.dtw.lbKeogh(&a, 5, &b, 5, 1);
+    const lb = lib.dtw.lbKeogh(&a, &b, 1);
 
-    var dtw_dist: f64 = undefined;
-    var pi: [10]i32 = undefined;
-    var pj: [10]i32 = undefined;
-    var plen: i32 = undefined;
-    _ = lib.dtw.constrainedDTW(std.testing.allocator, &a, 5, &b, 5, 1, &dtw_dist, &pi, &pj, &plen);
+    const result = try lib.dtw.constrainedDTW(std.testing.allocator, &a, &b, 1);
+    defer result.deinit(std.testing.allocator);
 
-    try std.testing.expect(lb <= dtw_dist + 1e-10);
+    try std.testing.expect(lb <= result.distance + 1e-10);
 }
 
 test "integration: invariants computation" {
@@ -253,10 +239,8 @@ test "integration: full pipeline insert -> preprocess -> extractFeatures" {
     for (normalized) |v| sum += v;
     try std.testing.expectApproxEqAbs(sum / 20.0, 0.0, 1e-10);
 
-    // Step 3: Extract features from the normalized series.
-    var feats: [22]f64 = undefined;
-    const rc = lib.features.extractFeatures(ally, normalized.ptr, 20, &feats);
-    try std.testing.expect(rc == 0);
+    // Step 3: Extract features from the normalized series (idiomatic Zig API).
+    const feats = try lib.features.extractFeatures(ally, normalized);
 
     // Step 4: Verify feature vector properties.
     // feats[0] = length = 20

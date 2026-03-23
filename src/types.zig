@@ -61,3 +61,52 @@ pub const MatchDecision = enum(u2) {
     review = 1,
     reject = 2,
 };
+
+// ============================================================================
+// Idiomatic Zig API result types
+// ============================================================================
+
+const std = @import("std");
+
+/// Result of a DTW computation: the distance and the warp path.
+/// The caller owns the `path` allocation and must free it via the same allocator.
+pub const DtwResult = struct {
+    distance: f64,
+    path: []PathPoint,
+
+    /// Free the path memory using the allocator that created it.
+    pub fn deinit(self: DtwResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+    }
+};
+
+/// Result of normalized cross-correlation.
+pub const CorrelationResult = struct {
+    lag: i32,
+    correlation: f64,
+};
+
+/// Result of matrix profile computation.
+/// The caller owns both `profile` and `indices` and must free them via the same allocator.
+pub const MatrixProfileResult = struct {
+    profile: []f64,
+    indices: []usize,
+
+    /// Free both allocations using the allocator that created them.
+    pub fn deinit(self: MatrixProfileResult, allocator: std.mem.Allocator) void {
+        allocator.free(self.profile);
+        allocator.free(self.indices);
+    }
+};
+
+/// Errors that can occur in time-series computations.
+pub const TsError = error{
+    /// Input slices are empty or have invalid lengths for the operation.
+    InvalidInput,
+    /// The requested allocation would exceed the safety cap.
+    AllocationTooLarge,
+    /// Series exceeds maximum allowed length (CPU DoS protection).
+    SeriesTooLong,
+    /// Standard out-of-memory from the allocator.
+    OutOfMemory,
+};

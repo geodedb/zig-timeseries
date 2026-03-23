@@ -10,7 +10,7 @@
 
 This security review identified **16 findings** across the timeseries library, grouped into **10 tracked issues**. The library exposes a C ABI consumed via Go CGO, making input validation at the boundary critical.
 
-**Cycle status (2026-03-23):** 12 findings closed (S1, S3, S4+S13, S5, S6, S7, S8+S9+S10, S11, S12, S14, S15, S16), 1 open (S2).
+**Cycle status (2026-03-23):** 13 findings closed (S1, S2, S3, S4+S13, S5, S6, S7, S8+S9+S10, S11, S12, S14, S15, S16), 0 open. S2 closed via idiomatic Zig API refactor: all ABI exports create bounded slices at boundary.
 
 | Severity | Count | Immediate Action Required |
 |----------|-------|---------------------------|
@@ -35,7 +35,7 @@ This security review identified **16 findings** across the timeseries library, g
 | Rank | Severity | Risk Score | Finding | Component | CWE / OWASP | Evidence (file:line) | Issue | Fix | Owner | Due | Status |
 |------|----------|------------|---------|-----------|-------------|---------------------|-------|-----|-------|-----|--------|
 | 1 | Critical | 100 | S1: Negative length @intCast panic/UB | ABI/all modules | CWE-839, CWE-190 / A03:2021 | dtw.zig:24-25, +15 sites | [#38](../../-/issues/38) (CONFIDENTIAL) | Validate c_int >= 0 before cast | TBD | 2026-03-24 | **Closed** (2026-03-22). Guards added before all @intCast in 17 functions. |
-| 2 | Critical | 80 | S2: OOB reads via many-pointers | ABI/all modules | CWE-125 / A03:2021 | dtw.zig:41, all functions | [#45](../../-/issues/45) (CONFIDENTIAL) | Convert to bounded slices at ABI boundary | TBD | 2026-03-24 | Triage |
+| 2 | Critical | 80 | S2: OOB reads via many-pointers | ABI/all modules | CWE-125 / A03:2021 | dtw.zig:41, all functions | [#45](../../-/issues/45) (CONFIDENTIAL) | Convert to bounded slices at ABI boundary | TBD | 2026-03-24 | **Closed** (2026-03-23). All ABI exports now create bounded slices (`a[0..n]`) from raw C pointers before calling internal functions. Internal functions use `[]const f64` exclusively, preventing OOB. All 224 tests pass. |
 | 3 | High | 80 | S5: Output buffer overflow | ABI layer | CWE-120, CWE-787 / A03:2021 | abi.zig:26-27, 146, 212-213, 238 | [#53](../../-/issues/53) (CONFIDENTIAL) | Add capacity params to all output buffers | TBD | 2026-03-29 | **Closed** (2026-03-22). ABI v2: Added path_cap to ts_dtw/ts_dtw_derivative/ts_dtw_open_end/ts_dtw_shape, cps_cap to ts_pelt, out_cap to ts_matrix_profile. All enforce capacity before writing output. |
 | 4 | High | 80 | S4+S13: Integer overflow n*m + ReleaseFast UB | DTW/distances + build | CWE-190, CWE-787 / A03:2021 | dtw.zig:30,161,266,365; build.zig:8 | [#38](../../-/issues/38) (CONFIDENTIAL) | Overflow-checked mul; enforce ReleaseSafe | TBD | 2026-03-29 | **Closed** (2026-03-22). std.math.mul checked multiplication at 8 allocation sites in dtw.zig (4) and distances.zig (4). |
 | 5 | High | 60 | S3: Quadratic memory exhaustion DoS | DTW/distances | CWE-789, CWE-400 / A05:2021 | dtw.zig:30, distances.zig:116,156,198,239 | [#48](../../-/issues/48) (CONFIDENTIAL) | Max allocation cap (256 MB default) | TBD | 2026-03-29 | **Closed** (2026-03-22). MAX_ALLOC_ELEMENTS cap (256MB) added in dtw.zig and distances.zig. All allocations check against cap. |

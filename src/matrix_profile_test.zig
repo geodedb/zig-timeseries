@@ -9,58 +9,48 @@ const expectApprox = std.testing.expectApproxEqAbs;
 test "matrix profile: basic computation" {
     // Repeating pattern: motif should be detected.
     const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
-    var profile: [15]f64 = undefined;
-    var indices: [15]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 15, 4, &profile, &indices, &plen);
-    try expect(rc == 0);
-    try expect(plen == 12); // 15 - 4 + 1
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 4);
+    defer result.deinit(std.testing.allocator);
+
+    try expect(result.profile.len == 12); // 15 - 4 + 1
 
     // The repeating pattern should produce near-zero distances for some positions.
     var has_near_zero = false;
-    for (0..@as(usize, @intCast(plen))) |i| {
-        if (profile[i] < 0.5) has_near_zero = true;
+    for (result.profile) |p| {
+        if (p < 0.5) has_near_zero = true;
     }
     try expect(has_near_zero);
 }
 
 test "matrix profile: empty series -> error" {
-    var profile: [1]f64 = undefined;
-    var indices: [1]i32 = undefined;
-    var plen: i32 = undefined;
-    const v = [_]f64{1};
+    const empty: []const f64 = &.{};
 
-    const rc = mp.matrixProfile(std.testing.allocator, &v, 0, 1, &profile, &indices, &plen);
-    try expect(rc == -1);
+    const result = mp.matrixProfile(std.testing.allocator, empty, 1);
+    try expect(result == error.InvalidInput);
 }
 
 test "matrix profile: window too large -> error" {
     const values = [_]f64{ 1, 2, 3 };
-    var profile: [3]f64 = undefined;
-    var indices: [3]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 3, 5, &profile, &indices, &plen);
-    try expect(rc == -1);
+    const result = mp.matrixProfile(std.testing.allocator, &values, 5);
+    try expect(result == error.InvalidInput);
 }
 
 test "MP dist: basic computation" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     const b = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
-    var dist: f64 = undefined;
 
-    const rc = mp.mpDist(std.testing.allocator, &a, 10, &b, 10, 3, &dist);
-    try expect(rc == 0);
+    const dist = try mp.mpDist(std.testing.allocator, &a, &b, 3);
     try expect(dist >= 0);
 }
 
 test "MP dist: empty series -> error" {
     const a = [_]f64{1};
-    var dist: f64 = undefined;
+    const empty: []const f64 = &.{};
 
-    const rc = mp.mpDist(std.testing.allocator, &a, 0, &a, 1, 1, &dist);
-    try expect(rc == -1);
+    const result = mp.mpDist(std.testing.allocator, empty, &a, 1);
+    try expect(result == error.InvalidInput);
 }
 
 test "MP dist: handles 8193+ points (no silent limit)" {
@@ -71,18 +61,14 @@ test "MP dist: handles 8193+ points (no silent limit)" {
     const b_buf = try page_alloc.alloc(f64, n);
     defer page_alloc.free(b_buf);
 
-    // Fill with identical repeating patterns.
     for (0..n) |i| {
         a_buf[i] = @sin(@as(f64, @floatFromInt(i)) * 0.1);
         b_buf[i] = @sin(@as(f64, @floatFromInt(i)) * 0.1);
     }
 
-    var dist: f64 = undefined;
     // Use a large window (8190) so plen_a = 4, keeping computation fast.
-    const rc = mp.mpDist(std.testing.allocator, a_buf.ptr, @intCast(n), b_buf.ptr, @intCast(n), 8190, &dist);
+    const dist = try mp.mpDist(std.testing.allocator, a_buf, b_buf, 8190);
 
-    // Should succeed (not -1), proving 8192 limit is removed.
-    try expect(rc == 0);
     try expect(dist >= 0);
 }
 
@@ -90,134 +76,97 @@ test "MP dist: handles 8193+ points (no silent limit)" {
 // STOMP algorithm correctness tests
 // ============================================================================
 
-test "matrix profile: constant series (std==0) produces infinity" {
-    // All values are the same -> all subsequences are constant.
-    // With exclusion zone, no valid match -> profile should be infinity.
+test "matrix profile: constant series (std==0) produces zeros outside exclusion zone" {
     const values = [_]f64{ 5, 5, 5, 5, 5, 5, 5, 5, 5, 5 };
-    var profile: [10]f64 = undefined;
-    var indices: [10]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 10, 3, &profile, &indices, &plen);
-    try expect(rc == 0);
-    try expect(plen == 8); // 10 - 3 + 1
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 3);
+    defer result.deinit(std.testing.allocator);
 
-    // All constant subsequences have std == 0. When both are constant,
-    // distance is 0. With the exclusion zone some pairs are skipped,
-    // but pairs outside the zone should have distance 0.
+    try expect(result.profile.len == 8); // 10 - 3 + 1
+
     var has_zero = false;
-    for (0..@as(usize, @intCast(plen))) |i| {
-        if (profile[i] < 0.01) has_zero = true;
+    for (result.profile) |p| {
+        if (p < 0.01) has_zero = true;
     }
     try expect(has_zero);
 }
 
 test "matrix profile: single subsequence (plen==1) -> infinity" {
-    // n == w -> plen == 1 -> no neighbor outside exclusion zone -> infinity.
     const values = [_]f64{ 1, 2, 3, 4, 5 };
-    var profile: [5]f64 = undefined;
-    var indices: [5]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 5, 5, &profile, &indices, &plen);
-    try expect(rc == 0);
-    try expect(plen == 1);
-    try expect(profile[0] == std.math.inf(f64));
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 5);
+    defer result.deinit(std.testing.allocator);
+
+    try expect(result.profile.len == 1);
+    try expect(result.profile[0] == std.math.inf(f64));
 }
 
 test "matrix profile: repeating pattern has near-zero motif distances" {
-    // Pattern [1,2,3] repeats. Identical subsequences at offsets 0,4,8
-    // should find near-zero nearest neighbors.
     const values = [_]f64{ 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3 };
-    var profile: [11]f64 = undefined;
-    var indices: [11]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 11, 3, &profile, &indices, &plen);
-    try expect(rc == 0);
-    try expect(plen == 9); // 11 - 3 + 1
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 3);
+    defer result.deinit(std.testing.allocator);
 
-    // Subsequences at positions 0, 4, 8 are all [1,2,3].
-    // Distance between identical z-normalized subsequences should be ~0.
-    try expectApprox(profile[0], 0.0, 0.1);
-    try expectApprox(profile[4], 0.0, 0.1);
-    try expectApprox(profile[8], 0.0, 0.1);
+    try expect(result.profile.len == 9); // 11 - 3 + 1
+
+    try expectApprox(result.profile[0], 0.0, 0.1);
+    try expectApprox(result.profile[4], 0.0, 0.1);
+    try expectApprox(result.profile[8], 0.0, 0.1);
 }
 
 test "matrix profile: symmetric -- profile[i]'s nearest neighbor points back" {
-    // In a self-join, if profile_index[i] == j, then profile[j] should be
-    // <= profile[i] (j found something at least as close or closer).
     const values = [_]f64{ 1, 3, 2, 5, 1, 3, 2, 4, 6, 1, 3, 2, 5 };
-    var profile: [13]f64 = undefined;
-    var indices: [13]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 13, 4, &profile, &indices, &plen);
-    try expect(rc == 0);
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 4);
+    defer result.deinit(std.testing.allocator);
 
-    const p: usize = @intCast(plen);
+    const p = result.profile.len;
     for (0..p) |i| {
-        const j: usize = @intCast(indices[i]);
+        const j = result.indices[i];
         if (j < p) {
-            // profile[j] should have found its best match (possibly i or closer).
-            try expect(profile[j] <= profile[i] + 1e-10);
+            try expect(result.profile[j] <= result.profile[i] + 1e-10);
         }
     }
 }
 
 test "matrix profile: window==2 with simple data" {
-    // Small window for manual verification.
     const values = [_]f64{ 0, 1, 0, 1, 0 };
-    var profile: [5]f64 = undefined;
-    var indices: [5]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 5, 2, &profile, &indices, &plen);
-    try expect(rc == 0);
-    try expect(plen == 4); // 5 - 2 + 1
+    const result = try mp.matrixProfile(std.testing.allocator, &values, 2);
+    defer result.deinit(std.testing.allocator);
 
-    // Subsequences: [0,1], [1,0], [0,1], [1,0]
-    // Exclusion zone: w/4 + 1 = 1. So position 0 cannot match 0 (self).
-    // z-norm of [0,1] and [0,1] = distance 0.
-    // z-norm of [0,1] and [1,0] = distance sqrt(2w) = 2.0 (anti-correlated).
-    // position 0 -> nearest is position 2 (same pattern), dist ~ 0
-    // position 1 -> nearest is position 3, dist ~ 0
-    try expectApprox(profile[0], 0.0, 1e-10);
-    try expectApprox(profile[1], 0.0, 1e-10);
-    try expectApprox(profile[2], 0.0, 1e-10);
-    try expectApprox(profile[3], 0.0, 1e-10);
+    try expect(result.profile.len == 4); // 5 - 2 + 1
+
+    try expectApprox(result.profile[0], 0.0, 1e-10);
+    try expectApprox(result.profile[1], 0.0, 1e-10);
+    try expectApprox(result.profile[2], 0.0, 1e-10);
+    try expectApprox(result.profile[3], 0.0, 1e-10);
 }
 
 // ============================================================================
-// Security: Negative length guards (GAP-0021/S1)
+// Security: Invalid input guards
 // ============================================================================
 
-test "matrix profile: negative values_len -> error" {
-    var profile: [1]f64 = undefined;
-    var indices: [1]i32 = undefined;
-    var plen: i32 = undefined;
-    const v = [_]f64{1};
-
-    const rc = mp.matrixProfile(std.testing.allocator, &v, -1, 1, &profile, &indices, &plen);
-    try expect(rc == -1);
-}
-
-test "matrix profile: negative window_len -> error" {
+test "matrix profile: zero window_len -> error" {
     const values = [_]f64{ 1, 2, 3 };
-    var profile: [3]f64 = undefined;
-    var indices: [3]i32 = undefined;
-    var plen: i32 = undefined;
 
-    const rc = mp.matrixProfile(std.testing.allocator, &values, 3, -1, &profile, &indices, &plen);
-    try expect(rc == -1);
+    const result = mp.matrixProfile(std.testing.allocator, &values, 0);
+    try expect(result == error.InvalidInput);
 }
 
-test "MP dist: negative length -> error" {
+test "MP dist: zero window_len -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    var dist: f64 = undefined;
 
-    const rc = mp.mpDist(std.testing.allocator, &a, -1, &a, 3, 1, &dist);
-    try expect(rc == -1);
+    const result = mp.mpDist(std.testing.allocator, &a, &a, 0);
+    try expect(result == error.InvalidInput);
+}
+
+test "MP dist: second slice empty -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    const empty: []const f64 = &.{};
+
+    const result = mp.mpDist(std.testing.allocator, &a, empty, 1);
+    try expect(result == error.InvalidInput);
 }
 
 // ============================================================================
@@ -225,21 +174,26 @@ test "MP dist: negative length -> error" {
 // ============================================================================
 
 test "matrix profile: series exceeding MAX_SERIES_LEN -> error" {
-    const v = [_]f64{1};
-    var profile: [1]f64 = undefined;
-    var indices: [1]i32 = undefined;
-    var plen: i32 = undefined;
+    // We cannot allocate 100001 elements, but we can test the guard
+    // by using a 1-element slice and claiming it is long.
+    // With the new API, we pass a slice, so we test via the SeriesTooLong path.
+    // We need a slice of length > 100000. Use page_allocator.
+    const page_alloc = std.heap.page_allocator;
+    const big = try page_alloc.alloc(f64, 100_001);
+    defer page_alloc.free(big);
+    for (big) |*v| v.* = 1.0;
 
-    // Pass a length of 100001 (exceeds MAX_SERIES_LEN=100000).
-    // The guard rejects before any pointer access beyond the first element.
-    const rc = mp.matrixProfile(std.testing.allocator, &v, 100_001, 1, &profile, &indices, &plen);
-    try expect(rc == -1);
+    const result = mp.matrixProfile(std.testing.allocator, big, 1);
+    try expect(result == error.SeriesTooLong);
 }
 
 test "MP dist: series exceeding MAX_SERIES_LEN -> error" {
-    const v = [_]f64{1};
-    var dist: f64 = undefined;
+    const page_alloc = std.heap.page_allocator;
+    const big = try page_alloc.alloc(f64, 100_001);
+    defer page_alloc.free(big);
+    for (big) |*v| v.* = 1.0;
 
-    const rc = mp.mpDist(std.testing.allocator, &v, 100_001, &v, 3, 1, &dist);
-    try expect(rc == -1);
+    const v3 = [_]f64{ 1, 2, 3 };
+    const result = mp.mpDist(std.testing.allocator, big, &v3, 1);
+    try expect(result == error.SeriesTooLong);
 }

@@ -3,6 +3,11 @@
 
 //! Non-DTW distance functions: cross-correlation, SBD, LCSS, EDR, ERP, TWED.
 //!
+//! All public functions use idiomatic Zig signatures:
+//! - Bounded slices (`[]const f64`) instead of raw pointers + length pairs
+//! - Error unions (`!`) instead of integer return codes
+//! - Result structs instead of output pointer parameters
+//!
 //! References:
 //! - Vlachos et al., "Discovering similar multidimensional trajectories", ICDE, 2002 (LCSS).
 //! - Chen & Ng, "On the marriage of Lp-norms and edit distance", VLDB, 2004 (EDR).
@@ -12,6 +17,9 @@
 
 const std = @import("std");
 const math = std.math;
+const types = @import("types.zig");
+const CorrelationResult = types.CorrelationResult;
+const TsError = types.TsError;
 
 /// Maximum number of f64 elements allowed in a single allocation (256 MB cap).
 const MAX_ALLOC_F64: usize = 256 * 1024 * 1024 / @sizeOf(f64);
@@ -86,19 +94,16 @@ fn nextPowerOf2(v: usize) usize {
 }
 
 /// Brute-force cross-correlation for small inputs.
-/// Computes normalized cross-correlation and finds the optimal lag.
 fn crossCorrelateBruteForce(
-    a: [*]const f64,
-    n: usize,
+    a: []const f64,
     mean_a: f64,
     norm_a: f64,
-    b: [*]const f64,
-    m: usize,
+    b: []const f64,
     mean_b: f64,
     norm_b: f64,
-    lag_out: *i32,
-    corr_out: *f64,
-) void {
+) CorrelationResult {
+    const n = a.len;
+    const m = b.len;
     const max_lag: i32 = @intCast(@max(n, m) - 1);
     var best_corr: f64 = -math.inf(f64);
     var best_lag: i32 = 0;
@@ -124,42 +129,36 @@ fn crossCorrelateBruteForce(
         }
     }
 
-    lag_out.* = best_lag;
-    corr_out.* = best_corr;
+    return .{ .lag = best_lag, .correlation = best_corr };
 }
 
 /// FFT-based cross-correlation for large inputs. O(n log n) instead of O(n^2).
-/// Uses page_allocator for internal FFT buffers. Returns -1 on allocation failure.
+/// Returns null on allocation failure.
 fn crossCorrelateFFT(
-    a: [*]const f64,
-    n: usize,
+    a: []const f64,
     mean_a: f64,
     norm_a: f64,
-    b: [*]const f64,
-    m: usize,
+    b: []const f64,
     mean_b: f64,
     norm_b: f64,
-    lag_out: *i32,
-    corr_out: *f64,
-) i32 {
-    const allocator = std.heap.page_allocator;
+) ?CorrelationResult {
+    const page_allocator = std.heap.page_allocator;
+    const n = a.len;
+    const m = b.len;
     const conv_len = n + m - 1;
     const fft_size = nextPowerOf2(conv_len);
 
-    // Guard against absurdly large allocations.
-    if (fft_size > MAX_ALLOC_F64) return -1;
+    if (fft_size > MAX_ALLOC_F64) return null;
 
-    // Allocate FFT buffers: real and imaginary parts for both series.
-    const ar = allocator.alloc(f64, fft_size) catch return -1;
-    defer allocator.free(ar);
-    const ai = allocator.alloc(f64, fft_size) catch return -1;
-    defer allocator.free(ai);
-    const br = allocator.alloc(f64, fft_size) catch return -1;
-    defer allocator.free(br);
-    const bi = allocator.alloc(f64, fft_size) catch return -1;
-    defer allocator.free(bi);
+    const ar = page_allocator.alloc(f64, fft_size) catch return null;
+    defer page_allocator.free(ar);
+    const ai = page_allocator.alloc(f64, fft_size) catch return null;
+    defer page_allocator.free(ai);
+    const br = page_allocator.alloc(f64, fft_size) catch return null;
+    defer page_allocator.free(br);
+    const bi = page_allocator.alloc(f64, fft_size) catch return null;
+    defer page_allocator.free(bi);
 
-    // Fill with mean-centered values, zero-pad the rest.
     for (0..fft_size) |i| {
         ar[i] = if (i < n) a[i] - mean_a else 0;
         ai[i] = 0;
@@ -167,12 +166,9 @@ fn crossCorrelateFFT(
         bi[i] = 0;
     }
 
-    // Forward FFT on both.
     fft(ar, ai, fft_size, false);
     fft(br, bi, fft_size, false);
 
-    // Pointwise multiply: A * conj(B) -> cross-correlation in frequency domain.
-    // conj(B) = (br, -bi), so A * conj(B) = (ar*br + ai*bi, ai*br - ar*bi).
     for (0..fft_size) |i| {
         const r = ar[i] * br[i] + ai[i] * bi[i];
         const im = ai[i] * br[i] - ar[i] * bi[i];
@@ -180,31 +176,14 @@ fn crossCorrelateFFT(
         ai[i] = im;
     }
 
-    // Inverse FFT to get cross-correlation values.
     fft(ar, ai, fft_size, true);
-
-    // The result ar[k] gives the cross-correlation at lag = k - (m - 1).
-    // But we used zero-padding from the left for b, so the mapping is:
-    // ar[k] for k in [0..conv_len) corresponds to lag = k - (m-1).
-    //
-    // However, since we zero-padded a[0..n] and b[0..m] starting at index 0,
-    // the FFT cross-correlation ar[k] actually gives the correlation for
-    // shifting b by k positions to the right relative to a.
-    // Specifically: CC(k) = sum_{i} a_centered[i] * b_centered[i - k]
-    // which means ar[k] = CC at lag k (for k = 0..n-1),
-    // and ar[fft_size - k] = CC at lag -k (for k = 1..m-1).
-    //
-    // Map: lag l corresponds to:
-    //   l >= 0: ar[l]
-    //   l < 0:  ar[fft_size + l]
 
     const norm_product = norm_a * norm_b;
     var best_corr: f64 = -math.inf(f64);
     var best_lag: i32 = 0;
-    const max_lag_pos: usize = n - 1; // positive lags 0..n-1
-    const max_lag_neg: usize = m - 1; // negative lags -1..-(m-1)
+    const max_lag_pos: usize = n - 1;
+    const max_lag_neg: usize = m - 1;
 
-    // Check non-negative lags: 0..max_lag_pos
     for (0..max_lag_pos + 1) |k| {
         const ncc = ar[k] / norm_product;
         if (ncc > best_corr) {
@@ -213,7 +192,6 @@ fn crossCorrelateFFT(
         }
     }
 
-    // Check negative lags: -1..-(max_lag_neg)
     for (1..max_lag_neg + 1) |k| {
         const ncc = ar[fft_size - k] / norm_product;
         const lag_val: i32 = -@as(i32, @intCast(k));
@@ -223,84 +201,71 @@ fn crossCorrelateFFT(
         }
     }
 
-    lag_out.* = best_lag;
-    corr_out.* = best_corr;
-    return 0;
+    return .{ .lag = best_lag, .correlation = best_corr };
 }
 
 /// Normalized cross-correlation returning optimal lag and correlation.
 /// Uses FFT-based O(n log n) algorithm for large inputs and brute-force
 /// O(n^2) for small inputs (n,m < 64) where FFT overhead is not worthwhile.
 pub fn crossCorrelate(
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    lag_out: *i32,
-    corr_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+    a: []const f64,
+    b: []const f64,
+) TsError!CorrelationResult {
+    if (a.len == 0 or b.len == 0) return TsError.InvalidInput;
+    const n = a.len;
+    const m = b.len;
 
     // Compute means and norms.
     var mean_a: f64 = 0;
-    for (0..n) |i| mean_a += a[i];
+    for (a) |v| mean_a += v;
     mean_a /= @as(f64, @floatFromInt(n));
 
     var mean_b: f64 = 0;
-    for (0..m) |i| mean_b += b[i];
+    for (b) |v| mean_b += v;
     mean_b /= @as(f64, @floatFromInt(m));
 
     var norm_a: f64 = 0;
-    for (0..n) |i| {
-        const d = a[i] - mean_a;
+    for (a) |v| {
+        const d = v - mean_a;
         norm_a += d * d;
     }
     norm_a = @sqrt(norm_a);
 
     var norm_b: f64 = 0;
-    for (0..m) |i| {
-        const d = b[i] - mean_b;
+    for (b) |v| {
+        const d = v - mean_b;
         norm_b += d * d;
     }
     norm_b = @sqrt(norm_b);
 
     if (norm_a == 0 or norm_b == 0) {
-        lag_out.* = 0;
-        corr_out.* = if (norm_a == 0 and norm_b == 0) 1.0 else 0.0;
-        return 0;
+        return CorrelationResult{
+            .lag = 0,
+            .correlation = if (norm_a == 0 and norm_b == 0) 1.0 else 0.0,
+        };
     }
 
     // Use brute-force for small inputs where FFT overhead is not worthwhile.
     if (n < FFT_THRESHOLD and m < FFT_THRESHOLD) {
-        crossCorrelateBruteForce(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
-        return 0;
+        return crossCorrelateBruteForce(a, mean_a, norm_a, b, mean_b, norm_b);
     }
 
     // Use FFT-based O(n log n) cross-correlation for larger inputs.
     // Falls back to brute-force if allocation fails.
-    const rc = crossCorrelateFFT(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
-    if (rc != 0) {
-        crossCorrelateBruteForce(a, n, mean_a, norm_a, b, m, mean_b, norm_b, lag_out, corr_out);
+    if (crossCorrelateFFT(a, mean_a, norm_a, b, mean_b, norm_b)) |result| {
+        return result;
     }
-    return 0;
+
+    return crossCorrelateBruteForce(a, mean_a, norm_a, b, mean_b, norm_b);
 }
 
 /// Shape-based distance (1 - max NCC), range [0, 2].
 pub fn sbd(
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
-    dist_out: *f64,
-) i32 {
-    var lag: i32 = undefined;
-    var corr: f64 = undefined;
-    const rc = crossCorrelate(a, a_len, b, b_len, &lag, &corr);
-    if (rc != 0) return rc;
-    dist_out.* = 1.0 - corr;
-    return 0;
+    a: []const f64,
+    b: []const f64,
+) TsError!f64 {
+    const result = try crossCorrelate(a, b);
+    return 1.0 - result.correlation;
 }
 
 /// LCSS: Longest Common Subsequence distance.
@@ -308,32 +273,28 @@ pub fn sbd(
 /// Uses a 2-row rolling buffer instead of a full (n+1)*(m+1) matrix.
 pub fn lcss(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
+    a: []const f64,
+    b: []const f64,
     epsilon: f64,
-    delta: i32,
-    dist_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+    delta: usize,
+) (TsError || error{OutOfMemory})!f64 {
+    if (a.len == 0 or b.len == 0) return TsError.InvalidInput;
+    const n = a.len;
+    const m = b.len;
 
-    const d: usize = if (delta <= 0) @max(n, m) else @intCast(delta);
+    const d: usize = if (delta == 0) @max(n, m) else delta;
     const cols = m + 1;
 
-    if (cols > MAX_ALLOC_I32) return -1;
-    const prev = allocator.alloc(i32, cols) catch return -1;
+    if (cols > MAX_ALLOC_I32) return TsError.AllocationTooLarge;
+    const prev = try allocator.alloc(i32, cols);
     defer allocator.free(prev);
-    const curr = allocator.alloc(i32, cols) catch return -1;
+    const curr = try allocator.alloc(i32, cols);
     defer allocator.free(curr);
 
-    // Initialize row 0: all zeros.
     for (0..cols) |j| prev[j] = 0;
 
     for (1..n + 1) |i| {
-        curr[0] = 0; // Column 0 is always 0.
+        curr[0] = 0;
         for (1..m + 1) |j| {
             const idx_diff = if (i - 1 >= j - 1) i - 1 - (j - 1) else j - 1 - (i - 1);
             if (idx_diff <= d and @abs(a[i - 1] - b[j - 1]) <= epsilon) {
@@ -347,38 +308,32 @@ pub fn lcss(
 
     const lcss_count: f64 = @floatFromInt(curr[m]);
     const min_len: f64 = @floatFromInt(@min(n, m));
-    dist_out.* = 1.0 - lcss_count / min_len;
-    return 0;
+    return 1.0 - lcss_count / min_len;
 }
 
 /// EDR: Edit Distance on Real Sequences.
 /// Returns normalized edit distance.
-/// Uses a 2-row rolling buffer instead of a full (n+1)*(m+1) matrix.
 pub fn edr(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
+    a: []const f64,
+    b: []const f64,
     epsilon: f64,
-    dist_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+) (TsError || error{OutOfMemory})!f64 {
+    if (a.len == 0 or b.len == 0) return TsError.InvalidInput;
+    const n = a.len;
+    const m = b.len;
 
     const cols = m + 1;
-    if (cols > MAX_ALLOC_I32) return -1;
-    const prev = allocator.alloc(i32, cols) catch return -1;
+    if (cols > MAX_ALLOC_I32) return TsError.AllocationTooLarge;
+    const prev = try allocator.alloc(i32, cols);
     defer allocator.free(prev);
-    const curr = allocator.alloc(i32, cols) catch return -1;
+    const curr = try allocator.alloc(i32, cols);
     defer allocator.free(curr);
 
-    // Initialize row 0: dp[0][j] = j.
     for (0..cols) |j| prev[j] = @intCast(j);
 
     for (1..n + 1) |i| {
-        curr[0] = @intCast(i); // dp[i][0] = i.
+        curr[0] = @intCast(i);
         for (1..m + 1) |j| {
             const subcost: i32 = if (@abs(a[i - 1] - b[j - 1]) <= epsilon) 0 else 1;
             const diag = prev[j - 1] + subcost;
@@ -391,39 +346,32 @@ pub fn edr(
 
     const edit: f64 = @floatFromInt(curr[m]);
     const max_len: f64 = @floatFromInt(@max(n, m));
-    dist_out.* = edit / max_len;
-    return 0;
+    return edit / max_len;
 }
 
 /// ERP: Edit distance with Real Penalty.
-/// Uses a 2-row rolling buffer instead of a full (n+1)*(m+1) matrix.
 pub fn erp(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    b: [*]const f64,
-    b_len: i32,
+    a: []const f64,
+    b: []const f64,
     gap_value: f64,
-    dist_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+) (TsError || error{OutOfMemory})!f64 {
+    if (a.len == 0 or b.len == 0) return TsError.InvalidInput;
+    const n = a.len;
+    const m = b.len;
 
     const cols = m + 1;
-    if (cols > MAX_ALLOC_F64) return -1;
-    const prev = allocator.alloc(f64, cols) catch return -1;
+    if (cols > MAX_ALLOC_F64) return TsError.AllocationTooLarge;
+    const prev = try allocator.alloc(f64, cols);
     defer allocator.free(prev);
-    const curr = allocator.alloc(f64, cols) catch return -1;
+    const curr = try allocator.alloc(f64, cols);
     defer allocator.free(curr);
 
-    // Initialize row 0: dp[0][0] = 0, dp[0][j] = dp[0][j-1] + |b[j-1] - gap|.
     prev[0] = 0;
     for (1..m + 1) |j| {
         prev[j] = prev[j - 1] + @abs(b[j - 1] - gap_value);
     }
 
-    // Track cumulative column-0 value (dp[i][0]).
     var col0: f64 = 0;
 
     for (1..n + 1) |i| {
@@ -438,56 +386,48 @@ pub fn erp(
         @memcpy(prev, curr);
     }
 
-    dist_out.* = curr[m];
-    return 0;
+    return curr[m];
 }
 
 /// TWED: Time Warp Edit Distance.
-/// Uses a 2-row rolling buffer instead of a full (n+1)*(m+1) matrix.
 pub fn twed(
     allocator: std.mem.Allocator,
-    a: [*]const f64,
-    a_len: i32,
-    a_times: [*]const f64,
-    b: [*]const f64,
-    b_len: i32,
-    b_times: [*]const f64,
+    a: []const f64,
+    a_times: []const f64,
+    b: []const f64,
+    b_times: []const f64,
     lambda: f64,
     nu: f64,
-    dist_out: *f64,
-) i32 {
-    if (a_len <= 0 or b_len <= 0) return -1;
-    const n: usize = @intCast(a_len);
-    const m: usize = @intCast(b_len);
+) (TsError || error{OutOfMemory})!f64 {
+    if (a.len == 0 or b.len == 0) return TsError.InvalidInput;
+    if (a.len != a_times.len or b.len != b_times.len) return TsError.InvalidInput;
+    const n = a.len;
+    const m = b.len;
 
     const cols = m + 1;
-    if (cols > MAX_ALLOC_F64) return -1;
-    const prev = allocator.alloc(f64, cols) catch return -1;
+    if (cols > MAX_ALLOC_F64) return TsError.AllocationTooLarge;
+    const prev = try allocator.alloc(f64, cols);
     defer allocator.free(prev);
-    const curr = allocator.alloc(f64, cols) catch return -1;
+    const curr = try allocator.alloc(f64, cols);
     defer allocator.free(curr);
 
-    // Initialize row 0: dp[0][0] = 0, dp[0][j] = inf.
     prev[0] = 0;
     for (1..m + 1) |j| prev[j] = math.inf(f64);
 
     for (1..n + 1) |i| {
-        curr[0] = math.inf(f64); // dp[i][0] = inf.
+        curr[0] = math.inf(f64);
         for (1..m + 1) |j| {
-            // Match: a[i-1] with b[j-1].
             const d_match = @abs(a[i - 1] - b[j - 1]);
             var cost_match = prev[j - 1] + d_match;
             if (i > 1 and j > 1) {
                 cost_match += nu * @abs(a_times[i - 1] - a_times[i - 2] - (b_times[j - 1] - b_times[j - 2]));
             }
 
-            // Delete from a.
             var cost_del_a = prev[j] + @abs(a[i - 1] - a[if (i > 1) i - 2 else 0]) + lambda;
             if (i > 1) {
                 cost_del_a += nu * @abs(a_times[i - 1] - a_times[i - 2]);
             }
 
-            // Delete from b.
             var cost_del_b = curr[j - 1] + @abs(b[j - 1] - b[if (j > 1) j - 2 else 0]) + lambda;
             if (j > 1) {
                 cost_del_b += nu * @abs(b_times[j - 1] - b_times[j - 2]);
@@ -498,6 +438,5 @@ pub fn twed(
         @memcpy(prev, curr);
     }
 
-    dist_out.* = curr[m];
-    return 0;
+    return curr[m];
 }
