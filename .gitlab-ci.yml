@@ -12,8 +12,7 @@ include:
   - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
   - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.7.1
 
-  # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
+  # Code quality -- zig-format@v1.2.1 replaced with local job due to URL breakage
 
   # SBOM
   - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.7.1
@@ -44,6 +43,15 @@ stages:
   - tar -xf zig.tar.xz
   - export PATH="$PWD/zig-x86_64-linux-${ZIG_VERSION}:$PATH"
   - zig version
+
+# Format check (replaces zig-format component)
+zig-format:
+  stage: lint
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - zig fmt --check src/ tests/ build.zig
 
 # Build job
 build:

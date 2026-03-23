@@ -416,30 +416,12 @@ test "ABI: ts_cosine_similarity negative length -> error (via S15)" {
 
 // NULL output pointer checks (S6)
 
-const NullTestHelpers = struct {
-    const DtwFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const ShapeDtwFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const DistFn2 = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
-    const SbdFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
-    const CrossCorrFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, ?*c_int, ?*f64) callconv(.c) c_int;
-    const PeltFn = *const fn ([*]const f64, c_int, f64, c_int, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const LcssFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, c_int, ?*f64) callconv(.c) c_int;
-    const ErpFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
-    const TwedFn = *const fn ([*]const f64, c_int, [*]const f64, [*]const f64, c_int, [*]const f64, f64, f64, ?*f64) callconv(.c) c_int;
-    const MatrixProfileFn = *const fn ([*]const f64, c_int, c_int, ?[*]f64, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const MpDistFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
-    const ExtractFeaturesFn = *const fn ([*]const f64, c_int, ?[*]f64) callconv(.c) c_int;
-    const LbKeoghFn = *const fn ([*]const f64, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
-    const CosineSimilarityFn = *const fn ([*]const f64, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
-};
-
 test "ABI: ts_dtw null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    try expect(f(&a, 3, &a, 3, 0, null, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw(&a, 3, &a, 3, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw null path_len pointer -> error" {
@@ -447,8 +429,7 @@ test "ABI: ts_dtw null path_len pointer -> error" {
     var dist: f64 = undefined;
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
-    const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    try expect(f(&a, 3, &a, 3, 0, &dist, &pi, &pj, null, 10) == -1);
+    try expect(abi.ts_dtw(&a, 3, &a, 3, 0, &dist, &pi, &pj, null, 10) == -1);
 }
 
 test "ABI: ts_dtw null path_i pointer -> error" {
@@ -456,8 +437,7 @@ test "ABI: ts_dtw null path_i pointer -> error" {
     var dist: f64 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw);
-    try expect(f(&a, 3, &a, 3, 0, &dist, null, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw(&a, 3, &a, 3, 0, &dist, null, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_derivative null dist pointer -> error" {
@@ -465,8 +445,7 @@ test "ABI: ts_dtw_derivative null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw_derivative);
-    try expect(f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_derivative(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_open_end null dist pointer -> error" {
@@ -474,8 +453,7 @@ test "ABI: ts_dtw_open_end null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.DtwFn = @ptrCast(&abi.ts_dtw_open_end);
-    try expect(f(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_open_end(&a, 5, &a, 5, 0, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_shape null dist pointer -> error" {
@@ -483,111 +461,94 @@ test "ABI: ts_dtw_shape null dist pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.ShapeDtwFn = @ptrCast(&abi.ts_dtw_shape);
-    try expect(f(&a, 5, &a, 5, 0, 3, null, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_shape(&a, 5, &a, 5, 0, 3, null, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_soft_dtw null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.DistFn2 = @ptrCast(&abi.ts_soft_dtw);
-    try expect(f(&a, 3, &a, 3, 1.0, null) == -1);
+    try expect(abi.ts_soft_dtw(&a, 3, &a, 3, 1.0, null) == -1);
 }
 
 test "ABI: ts_cross_correlate null lag pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     var corr: f64 = undefined;
-    const f: NullTestHelpers.CrossCorrFn = @ptrCast(&abi.ts_cross_correlate);
-    try expect(f(&a, 3, &a, 3, null, &corr) == -1);
+    try expect(abi.ts_cross_correlate(&a, 3, &a, 3, null, &corr) == -1);
 }
 
 test "ABI: ts_cross_correlate null corr pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     var lag: c_int = undefined;
-    const f: NullTestHelpers.CrossCorrFn = @ptrCast(&abi.ts_cross_correlate);
-    try expect(f(&a, 3, &a, 3, &lag, null) == -1);
+    try expect(abi.ts_cross_correlate(&a, 3, &a, 3, &lag, null) == -1);
 }
 
 test "ABI: ts_sbd null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.SbdFn = @ptrCast(&abi.ts_sbd);
-    try expect(f(&a, 3, &a, 3, null) == -1);
+    try expect(abi.ts_sbd(&a, 3, &a, 3, null) == -1);
 }
 
 test "ABI: ts_pelt null cps pointer -> error" {
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps_len: c_int = undefined;
-    const f: NullTestHelpers.PeltFn = @ptrCast(&abi.ts_pelt);
-    try expect(f(&values, 10, 5.0, 2, null, &cps_len, 10) == -1);
+    try expect(abi.ts_pelt(&values, 10, 5.0, 2, null, &cps_len, 10) == -1);
 }
 
 test "ABI: ts_pelt null cps_len pointer -> error" {
     const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
     var cps: [10]i32 = undefined;
-    const f: NullTestHelpers.PeltFn = @ptrCast(&abi.ts_pelt);
-    try expect(f(&values, 10, 5.0, 2, &cps, null, 10) == -1);
+    try expect(abi.ts_pelt(&values, 10, 5.0, 2, &cps, null, 10) == -1);
 }
 
 test "ABI: ts_lcss null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.LcssFn = @ptrCast(&abi.ts_lcss);
-    try expect(f(&a, 3, &a, 3, 0.5, 2, null) == -1);
+    try expect(abi.ts_lcss(&a, 3, &a, 3, 0.5, 2, null) == -1);
 }
 
 test "ABI: ts_edr null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.DistFn2 = @ptrCast(&abi.ts_edr);
-    try expect(f(&a, 3, &a, 3, 0.5, null) == -1);
+    try expect(abi.ts_edr(&a, 3, &a, 3, 0.5, null) == -1);
 }
 
 test "ABI: ts_erp null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.ErpFn = @ptrCast(&abi.ts_erp);
-    try expect(f(&a, 3, &a, 3, 0.0, null) == -1);
+    try expect(abi.ts_erp(&a, 3, &a, 3, 0.0, null) == -1);
 }
 
 test "ABI: ts_twed null dist pointer -> error" {
     const v = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
-    const f: NullTestHelpers.TwedFn = @ptrCast(&abi.ts_twed);
-    try expect(f(&v, 3, &t, &v, 3, &t, 0.5, 0.5, null) == -1);
+    try expect(abi.ts_twed(&v, 3, &t, &v, 3, &t, 0.5, 0.5, null) == -1);
 }
 
 test "ABI: ts_matrix_profile null profile pointer -> error" {
     const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var indices: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const f: NullTestHelpers.MatrixProfileFn = @ptrCast(&abi.ts_matrix_profile);
-    try expect(f(&values, 10, 3, null, &indices, &plen, 10) == -1);
+    try expect(abi.ts_matrix_profile(&values, 10, 3, null, &indices, &plen, 10) == -1);
 }
 
 test "ABI: ts_matrix_profile null profile_len pointer -> error" {
     const values = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var profile: [10]f64 = undefined;
     var indices: [10]i32 = undefined;
-    const f: NullTestHelpers.MatrixProfileFn = @ptrCast(&abi.ts_matrix_profile);
-    try expect(f(&values, 10, 3, &profile, &indices, null, 10) == -1);
+    try expect(abi.ts_matrix_profile(&values, 10, 3, &profile, &indices, null, 10) == -1);
 }
 
 test "ABI: ts_mp_dist null dist pointer -> error" {
     const a = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
-    const f: NullTestHelpers.MpDistFn = @ptrCast(&abi.ts_mp_dist);
-    try expect(f(&a, 10, &a, 10, 3, null) == -1);
+    try expect(abi.ts_mp_dist(&a, 10, &a, 10, 3, null) == -1);
 }
 
 test "ABI: ts_extract_features null features_out pointer -> error" {
     const values = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.ExtractFeaturesFn = @ptrCast(&abi.ts_extract_features);
-    try expect(f(&values, 3, null) == -1);
+    try expect(abi.ts_extract_features(&values, 3, null) == -1);
 }
 
 test "ABI: ts_lb_keogh null result pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.LbKeoghFn = @ptrCast(&abi.ts_lb_keogh);
-    try expect(f(&a, 3, &a, 3, 1, null) == -1);
+    try expect(abi.ts_lb_keogh(&a, 3, &a, 3, 1, null) == -1);
 }
 
 test "ABI: ts_cosine_similarity null result pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
-    const f: NullTestHelpers.CosineSimilarityFn = @ptrCast(&abi.ts_cosine_similarity);
-    try expect(f(&a, &a, 3, null) == -1);
+    try expect(abi.ts_cosine_similarity(&a, &a, 3, null) == -1);
 }
