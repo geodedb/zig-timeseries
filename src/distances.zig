@@ -32,7 +32,7 @@ const FFT_THRESHOLD: usize = 64;
 
 /// Radix-2 Cooley-Tukey in-place FFT (or inverse FFT).
 /// `real` and `imag` are modified in-place. `n` must be a power of 2.
-fn fft(real: []f64, imag: []f64, n: usize, inverse: bool) void {
+pub fn fft(real: []f64, imag: []f64, n: usize, inverse: bool) void {
     // Bit-reversal permutation.
     var j: usize = 0;
     for (1..n) |i| {
@@ -86,7 +86,7 @@ fn fft(real: []f64, imag: []f64, n: usize, inverse: bool) void {
 }
 
 /// Return the smallest power of 2 >= v.
-fn nextPowerOf2(v: usize) usize {
+pub fn nextPowerOf2(v: usize) usize {
     if (v == 0) return 1;
     var p: usize = 1;
     while (p < v) p <<= 1;

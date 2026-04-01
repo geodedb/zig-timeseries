@@ -14,6 +14,8 @@
 //! - `matrix_profile` -- Matrix profile and MPDist
 //! - `features` -- 22-element feature extraction and cosine similarity
 //! - `pelt` -- PELT change-point detection
+//! - `spectral` -- FFT magnitude, STFT, Spectral Residual, Haar DWT
+//! - `anomaly` -- CUSUM and EWMA anomaly/change-point detection
 //! - `types` -- Core data types (PathPoint, Alignment, InvariantSet)
 //!
 //! ## License
@@ -36,6 +38,8 @@ pub const preprocess = @import("preprocess.zig");
 pub const invariants = @import("invariants.zig");
 pub const store = @import("store.zig");
 pub const chunk_storage = @import("chunk_storage.zig");
+pub const spectral = @import("spectral.zig");
+pub const anomaly = @import("anomaly.zig");
 
 // Re-export core types at top level.
 pub const Gap = types.Gap;
@@ -84,4 +88,6 @@ test {
     _ = @import("invariants_test.zig");
     _ = @import("abi_test.zig");
     _ = @import("types_test.zig");
+    _ = @import("spectral_test.zig");
+    _ = @import("anomaly_test.zig");
 }
