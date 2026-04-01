@@ -60,6 +60,7 @@ pub const PointF64 = store.PointF64;
 pub const SeriesKey = store.SeriesKey;
 pub const Series = store.Series;
 pub const Store = store.Store;
+pub const StoreConfig = store.StoreConfig;
 pub const ChunkConfig = chunk_storage.ChunkConfig;
 pub const ChunkStorage = chunk_storage.ChunkStorage;
 

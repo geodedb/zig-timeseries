@@ -426,7 +426,11 @@ pub const ChunkStorage = struct {
             .mode = 0o600,
         });
 
-        return .{
+        // Seek to end so new writes append after existing data.
+        const end_pos = try file.getEndPos();
+        try file.seekTo(end_pos);
+
+        var self = ChunkStorage{
             .allocator = allocator,
             .config = config,
             .chunks = .{},
@@ -434,6 +438,11 @@ pub const ChunkStorage = struct {
             .data_file = file,
             .data_dir = try allocator.dupe(u8, data_dir),
         };
+
+        // Load persisted chunk metadata if available.
+        try self.loadChunkMeta();
+
+        return self;
     }
 
     pub fn deinit(self: *ChunkStorage) void {
@@ -488,6 +497,9 @@ pub const ChunkStorage = struct {
             gop.value_ptr.* = .{};
         }
         try gop.value_ptr.append(self.allocator, chunk_idx);
+
+        // Persist chunk metadata to disk.
+        try self.appendChunkMeta(meta);
     }
 
     /// Query chunks for a time range.
@@ -595,6 +607,107 @@ pub const ChunkStorage = struct {
             .ratio = ratio,
             .avg_chunk_size = avg_size,
             .total_chunks = self.chunks.items.len,
+        };
+    }
+
+    // ====================================================================
+    // Chunk metadata persistence
+    // ====================================================================
+
+    /// ChunkMeta is fixed-size when serialized: 8+8+8+4+4+4+4+8 = 48 bytes.
+    const chunk_meta_size: usize = 48;
+
+    /// Append a single ChunkMeta record to the chunk_meta.dat file.
+    fn appendChunkMeta(self: *ChunkStorage, meta: ChunkMeta) !void {
+        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
+        defer self.allocator.free(meta_path);
+
+        const file = try std.fs.cwd().createFile(meta_path, .{
+            .read = true,
+            .truncate = false,
+            .mode = 0o600,
+        });
+        defer file.close();
+
+        const end_pos = try file.getEndPos();
+        try file.seekTo(end_pos);
+
+        var buf: [chunk_meta_size]u8 = undefined;
+        serializeChunkMeta(&buf, meta);
+        _ = try file.write(&buf);
+    }
+
+    /// Load all ChunkMeta records from chunk_meta.dat and rebuild the in-memory index.
+    fn loadChunkMeta(self: *ChunkStorage) !void {
+        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
+        defer self.allocator.free(meta_path);
+
+        const file = std.fs.cwd().openFile(meta_path, .{}) catch return; // No metadata yet.
+        defer file.close();
+
+        while (true) {
+            var buf: [chunk_meta_size]u8 = undefined;
+            const n = file.readAll(&buf) catch break;
+            if (n < chunk_meta_size) break;
+
+            const meta = deserializeChunkMeta(&buf);
+            const chunk_idx = self.chunks.items.len;
+            try self.chunks.append(self.allocator, meta);
+
+            const gop = try self.index.getOrPut(meta.series_id);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = .{};
+            }
+            try gop.value_ptr.append(self.allocator, chunk_idx);
+        }
+    }
+
+    fn serializeChunkMeta(buf: *[chunk_meta_size]u8, m: ChunkMeta) void {
+        var off: usize = 0;
+        std.mem.writeInt(u64, buf[off..][0..8], m.series_id, .little);
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], m.start_ts, .little);
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], m.end_ts, .little);
+        off += 8;
+        std.mem.writeInt(u32, buf[off..][0..4], m.num_points, .little);
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], m.compressed_size, .little);
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], m.uncompressed_size, .little);
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], @intFromEnum(m.compression), .little);
+        off += 4;
+        std.mem.writeInt(u64, buf[off..][0..8], m.page_offset, .little);
+    }
+
+    fn deserializeChunkMeta(buf: *const [chunk_meta_size]u8) ChunkMeta {
+        var off: usize = 0;
+        const series_id = std.mem.readInt(u64, buf[off..][0..8], .little);
+        off += 8;
+        const start_ts = std.mem.readInt(i64, buf[off..][0..8], .little);
+        off += 8;
+        const end_ts = std.mem.readInt(i64, buf[off..][0..8], .little);
+        off += 8;
+        const num_points = std.mem.readInt(u32, buf[off..][0..4], .little);
+        off += 4;
+        const compressed_size = std.mem.readInt(u32, buf[off..][0..4], .little);
+        off += 4;
+        const uncompressed_size = std.mem.readInt(u32, buf[off..][0..4], .little);
+        off += 4;
+        const compression_raw = std.mem.readInt(u32, buf[off..][0..4], .little);
+        off += 4;
+        const page_offset = std.mem.readInt(u64, buf[off..][0..8], .little);
+
+        return .{
+            .series_id = series_id,
+            .start_ts = start_ts,
+            .end_ts = end_ts,
+            .num_points = num_points,
+            .compressed_size = compressed_size,
+            .uncompressed_size = uncompressed_size,
+            .compression = @enumFromInt(compression_raw),
+            .page_offset = page_offset,
         };
     }
 };

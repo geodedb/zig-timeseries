@@ -5,6 +5,7 @@
 //! Ported from Geode's timeseries.zig with Zig 0.15 API fixes.
 
 const std = @import("std");
+const chunk_storage = @import("chunk_storage.zig");
 
 /// Time-series data point.
 pub const Point = struct {
@@ -80,19 +81,59 @@ pub const SampleRow = struct { ts: i64, value: ?i64 };
 /// Output row from timeBucketAvg.
 pub const BucketAvgRow = struct { ts: i64, avg: ?i64 };
 
+/// Configuration for optional disk persistence.
+pub const StoreConfig = struct {
+    data_dir: ?[]const u8 = null,
+    chunk_config: chunk_storage.ChunkConfig = .{},
+};
+
 /// Main time-series store.
 pub const Store = struct {
     allocator: std.mem.Allocator,
     by_key: std.AutoHashMap(u128, *Series),
+    chunk_store: ?*chunk_storage.ChunkStorage = null,
+    config: StoreConfig = .{},
+    /// Tracks unflushed point counts per series for flush-threshold logic.
+    unflushed: std.AutoHashMap(u128, usize),
+    /// Maps the lower-64 chunk series_id back to the full u128 hash for loadFromDisk.
+    chunk_id_to_hash: std.AutoHashMap(u64, u128),
 
+    /// Initialize an in-memory-only store (backward compatible).
     pub fn init(allocator: std.mem.Allocator) Store {
         return .{
             .allocator = allocator,
             .by_key = std.AutoHashMap(u128, *Series).init(allocator),
+            .unflushed = std.AutoHashMap(u128, usize).init(allocator),
+            .chunk_id_to_hash = std.AutoHashMap(u64, u128).init(allocator),
         };
     }
 
+    /// Initialize a store with optional persistence via StoreConfig.
+    pub fn initWithConfig(allocator: std.mem.Allocator, config: StoreConfig) !Store {
+        var self = Store{
+            .allocator = allocator,
+            .by_key = std.AutoHashMap(u128, *Series).init(allocator),
+            .config = config,
+            .unflushed = std.AutoHashMap(u128, usize).init(allocator),
+            .chunk_id_to_hash = std.AutoHashMap(u64, u128).init(allocator),
+        };
+
+        if (config.data_dir) |dir| {
+            const ts_dir = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{dir});
+            defer allocator.free(ts_dir);
+
+            const cs = try allocator.create(chunk_storage.ChunkStorage);
+            cs.* = try chunk_storage.ChunkStorage.init(allocator, ts_dir, config.chunk_config);
+            self.chunk_store = cs;
+        }
+
+        return self;
+    }
+
     pub fn deinit(self: *Store) void {
+        // Flush any unflushed data before shutdown.
+        self.sync() catch {};
+
         var it = self.by_key.valueIterator();
         while (it.next()) |sp| {
             const s = sp.*;
@@ -101,18 +142,18 @@ pub const Store = struct {
             self.allocator.destroy(s);
         }
         self.by_key.deinit();
+        self.unflushed.deinit();
+        self.chunk_id_to_hash.deinit();
+
+        if (self.chunk_store) |cs| {
+            cs.deinit();
+            self.allocator.destroy(cs);
+            self.chunk_store = null;
+        }
     }
 
     pub fn hashKey(_: *Store, k: SeriesKey) u128 {
-        var h1 = std.hash.Wyhash.init(0);
-        h1.update(std.mem.asBytes(&k.device_id));
-        h1.update(k.metric);
-        const x1 = h1.final();
-        var h2 = std.hash.Wyhash.init(0x517cc1b727220a95);
-        h2.update(std.mem.asBytes(&k.device_id));
-        h2.update(k.metric);
-        const x2 = h2.final();
-        return (@as(u128, x1) << 64) | @as(u128, x2);
+        return hashKeyStatic(k);
     }
 
     pub fn getSeries(self: *Store, key: SeriesKey) ?*Series {
@@ -138,6 +179,8 @@ pub const Store = struct {
     /// Batch-insert points into a series, maintaining sorted order.
     /// Optimized: if the batch is already sorted and all timestamps are >=
     /// the last existing timestamp, avoids re-sorting the entire array.
+    /// When persistence is enabled, flushes to ChunkStorage when the
+    /// unflushed count reaches the chunk_config.max_points_per_chunk threshold.
     pub fn insertMany(self: *Store, key: SeriesKey, pts: []const Point) !void {
         const s = try self.getOrCreateSeries(key);
         if (pts.len == 0) return;
@@ -168,6 +211,33 @@ pub const Store = struct {
         if (!can_append) {
             // Fallback: full sort when batch is unordered or overlaps existing data.
             std.sort.pdq(Point, s.points.items, {}, cmpFn);
+        }
+
+        // Persist: track unflushed count and flush when threshold is reached.
+        if (self.chunk_store) |cs| {
+            const hk = self.hashKey(key);
+            const chunk_id = chunkSeriesId(hk);
+
+            // Register the reverse mapping for loadFromDisk.
+            const id_gop = try self.chunk_id_to_hash.getOrPut(chunk_id);
+            if (!id_gop.found_existing) {
+                id_gop.value_ptr.* = hk;
+            }
+
+            // Save series key metadata for loadFromDisk recovery.
+            try self.saveSeriesKeyMeta(key, chunk_id);
+
+            const gop = try self.unflushed.getOrPut(hk);
+            if (!gop.found_existing) {
+                gop.value_ptr.* = 0;
+            }
+            gop.value_ptr.* += pts.len;
+
+            if (gop.value_ptr.* >= cs.config.max_points_per_chunk) {
+                // Flush all points in this series to a new chunk.
+                try cs.writePoints(chunk_id, s.points.items);
+                gop.value_ptr.* = 0;
+            }
         }
     }
 
@@ -324,7 +394,241 @@ pub const Store = struct {
         }
         return out;
     }
+
+    // ========================================================================
+    // Persistence helpers
+    // ========================================================================
+
+    /// Flush all unflushed in-memory points to ChunkStorage.
+    /// Called from deinit and can be called explicitly.
+    pub fn sync(self: *Store) !void {
+        const cs = self.chunk_store orelse return;
+
+        var ufit = self.unflushed.iterator();
+        while (ufit.next()) |entry| {
+            const count = entry.value_ptr.*;
+            if (count == 0) continue;
+
+            const hk = entry.key_ptr.*;
+            const series = self.by_key.get(hk) orelse continue;
+            if (series.points.items.len == 0) continue;
+
+            const chunk_id = chunkSeriesId(hk);
+            try cs.writePoints(chunk_id, series.points.items);
+            entry.value_ptr.* = 0;
+        }
+    }
+
+    /// Load all persisted data from ChunkStorage into memory.
+    /// Call after initWithConfig to hydrate the store on startup.
+    pub fn loadFromDisk(self: *Store) !void {
+        const cs = self.chunk_store orelse return;
+
+        // Load series key metadata first.
+        try self.loadAllSeriesKeyMeta();
+
+        // Iterate over all chunk metadata entries and load by series.
+        var loaded_series = std.AutoHashMap(u64, bool).init(self.allocator);
+        defer loaded_series.deinit();
+
+        for (cs.chunks.items) |chunk| {
+            const sid = chunk.series_id;
+            if (loaded_series.get(sid) != null) continue;
+            try loaded_series.put(sid, true);
+
+            // Look up the SeriesKey from the metadata file.
+            const key = try self.readSeriesKeyForChunkId(sid) orelse continue;
+            defer self.allocator.free(key.metric);
+
+            // Query all points for this series from disk (full time range).
+            const points = try cs.queryRange(sid, std.math.minInt(i64), std.math.maxInt(i64), self.allocator);
+            defer self.allocator.free(points);
+
+            if (points.len > 0) {
+                try self.insertMany(key, points);
+                // Reset unflushed counter since this data is already on disk.
+                const hk = self.hashKey(key);
+                if (self.unflushed.getPtr(hk)) |ptr| {
+                    ptr.* = 0;
+                }
+            }
+        }
+    }
+
+    /// Run retention policy on the underlying ChunkStorage.
+    pub fn runRetention(self: *Store, current_time: i64) !void {
+        const cs = self.chunk_store orelse return;
+        try cs.runRetention(current_time);
+    }
+
+    /// Persist series key metadata (device_id, metric) to a file so that
+    /// loadFromDisk can reconstruct SeriesKey from a chunk series_id.
+    fn saveSeriesKeyMeta(self: *Store, key: SeriesKey, chunk_id: u64) !void {
+        const cs = self.chunk_store orelse return;
+
+        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
+        defer self.allocator.free(meta_path);
+
+        // Append-only: open for appending, create if needed.
+        const file = try std.fs.cwd().createFile(meta_path, .{
+            .read = true,
+            .truncate = false,
+            .mode = 0o600,
+        });
+        defer file.close();
+
+        // Check if this chunk_id is already in the file to avoid duplicates.
+        try file.seekTo(0);
+        while (true) {
+            var id_buf: [8]u8 = undefined;
+            const id_read = file.readAll(&id_buf) catch break;
+            if (id_read < 8) break;
+            const existing_id = std.mem.readInt(u64, &id_buf, .little);
+
+            var dev_buf: [8]u8 = undefined;
+            const dev_read = file.readAll(&dev_buf) catch break;
+            if (dev_read < 8) break;
+
+            var len_buf: [4]u8 = undefined;
+            const len_read = file.readAll(&len_buf) catch break;
+            if (len_read < 4) break;
+            const metric_len = std.mem.readInt(u32, &len_buf, .little);
+
+            // Skip metric bytes.
+            const pos = try file.getPos();
+            try file.seekTo(pos + metric_len);
+
+            if (existing_id == chunk_id) return; // Already stored.
+        }
+
+        // Seek to end and append.
+        const final_end = try file.getEndPos();
+        try file.seekTo(final_end);
+
+        // Write: chunk_id (8) | device_id (8) | metric_len (4) | metric (N).
+        var id_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &id_bytes, chunk_id, .little);
+        _ = try file.write(&id_bytes);
+
+        var dev_bytes: [8]u8 = undefined;
+        std.mem.writeInt(i64, &dev_bytes, key.device_id, .little);
+        _ = try file.write(&dev_bytes);
+
+        var len_bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &len_bytes, @intCast(key.metric.len), .little);
+        _ = try file.write(&len_bytes);
+
+        _ = try file.write(key.metric);
+    }
+
+    /// Load all series key metadata entries into chunk_id_to_hash map.
+    fn loadAllSeriesKeyMeta(self: *Store) !void {
+        const cs = self.chunk_store orelse return;
+
+        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
+        defer self.allocator.free(meta_path);
+
+        const file = std.fs.cwd().openFile(meta_path, .{}) catch return;
+        defer file.close();
+
+        while (true) {
+            var id_buf: [8]u8 = undefined;
+            const id_read = file.readAll(&id_buf) catch break;
+            if (id_read < 8) break;
+            const chunk_id = std.mem.readInt(u64, &id_buf, .little);
+
+            var dev_buf: [8]u8 = undefined;
+            const dev_read = file.readAll(&dev_buf) catch break;
+            if (dev_read < 8) break;
+            const device_id = std.mem.readInt(i64, &dev_buf, .little);
+
+            var len_buf: [4]u8 = undefined;
+            const len_read = file.readAll(&len_buf) catch break;
+            if (len_read < 4) break;
+            const metric_len = std.mem.readInt(u32, &len_buf, .little);
+
+            const metric = try self.allocator.alloc(u8, metric_len);
+            const m_read = file.readAll(metric) catch {
+                self.allocator.free(metric);
+                break;
+            };
+            if (m_read < metric_len) {
+                self.allocator.free(metric);
+                break;
+            }
+
+            // Compute the hash and register the mapping.
+            const key = SeriesKey{ .device_id = device_id, .metric = metric };
+            const hk = hashKeyStatic(key);
+            self.allocator.free(metric);
+
+            try self.chunk_id_to_hash.put(chunk_id, hk);
+        }
+    }
+
+    /// Read a specific series key from the metadata file given a chunk_id.
+    fn readSeriesKeyForChunkId(self: *Store, target_chunk_id: u64) !?SeriesKey {
+        const cs = self.chunk_store orelse return null;
+
+        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
+        defer self.allocator.free(meta_path);
+
+        const file = std.fs.cwd().openFile(meta_path, .{}) catch return null;
+        defer file.close();
+
+        while (true) {
+            var id_buf: [8]u8 = undefined;
+            const id_read = file.readAll(&id_buf) catch break;
+            if (id_read < 8) break;
+            const chunk_id = std.mem.readInt(u64, &id_buf, .little);
+
+            var dev_buf: [8]u8 = undefined;
+            const dev_read = file.readAll(&dev_buf) catch break;
+            if (dev_read < 8) break;
+            const device_id = std.mem.readInt(i64, &dev_buf, .little);
+
+            var len_buf: [4]u8 = undefined;
+            const len_read = file.readAll(&len_buf) catch break;
+            if (len_read < 4) break;
+            const metric_len = std.mem.readInt(u32, &len_buf, .little);
+
+            const metric = try self.allocator.alloc(u8, metric_len);
+            const m_read = file.readAll(metric) catch {
+                self.allocator.free(metric);
+                break;
+            };
+            if (m_read < metric_len) {
+                self.allocator.free(metric);
+                break;
+            }
+
+            if (chunk_id == target_chunk_id) {
+                return SeriesKey{ .device_id = device_id, .metric = metric };
+            }
+            self.allocator.free(metric);
+        }
+
+        return null;
+    }
 };
+
+/// Extract the lower 64 bits of a u128 hash for use as ChunkStorage series_id.
+fn chunkSeriesId(hk: u128) u64 {
+    return @intCast(hk & 0xFFFFFFFFFFFFFFFF);
+}
+
+/// Static version of hashKey that does not require a Store instance.
+fn hashKeyStatic(k: SeriesKey) u128 {
+    var h1 = std.hash.Wyhash.init(0);
+    h1.update(std.mem.asBytes(&k.device_id));
+    h1.update(k.metric);
+    const x1 = h1.final();
+    var h2 = std.hash.Wyhash.init(0x517cc1b727220a95);
+    h2.update(std.mem.asBytes(&k.device_id));
+    h2.update(k.metric);
+    const x2 = h2.final();
+    return (@as(u128, x1) << 64) | @as(u128, x2);
+}
 
 // ============================================================================
 // Tests
@@ -440,4 +744,154 @@ test "store: hashKey uses independent seeds for full 128-bit entropy" {
     // Verify same key produces same hash (deterministic).
     const h_again = st.hashKey(key);
     try std.testing.expect(h == h_again);
+}
+
+// ============================================================================
+// Persistence Tests (GAP-0292)
+// ============================================================================
+
+test "store: initWithConfig backward compat — no data_dir" {
+    const allocator = std.testing.allocator;
+    var st = try Store.initWithConfig(allocator, .{});
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 1, .metric = "temp" };
+    try st.insertMany(key, &.{.{ .ts = 100, .value = 10 }});
+    const l = st.last(key).?;
+    try std.testing.expectEqual(@as(i64, 100), l.ts);
+    try std.testing.expectEqual(@as(i64, 10), l.value);
+    try std.testing.expect(st.chunk_store == null);
+}
+
+test "store: persist-restart-query round-trip" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_persist_{d}", .{pid}) catch unreachable;
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const key = SeriesKey{ .device_id = 42, .metric = "cpu_temp" };
+
+    // Phase 1: Create store, insert data, deinit (flushes to disk).
+    {
+        var st = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 10 },
+        });
+        defer st.deinit();
+
+        try st.insertMany(key, &.{
+            .{ .ts = 1000, .value = 10 },
+            .{ .ts = 2000, .value = 20 },
+            .{ .ts = 3000, .value = 30 },
+            .{ .ts = 4000, .value = 40 },
+            .{ .ts = 5000, .value = 50 },
+        });
+    }
+
+    // Phase 2: Re-create store from same data_dir, loadFromDisk, query.
+    {
+        var st2 = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 10 },
+        });
+        defer st2.deinit();
+
+        try st2.loadFromDisk();
+
+        // Verify data is present and queryable.
+        const l = st2.last(key);
+        try std.testing.expect(l != null);
+        try std.testing.expectEqual(@as(i64, 5000), l.?.ts);
+        try std.testing.expectEqual(@as(i64, 50), l.?.value);
+
+        // Verify all points loaded.
+        const series = st2.getSeries(key);
+        try std.testing.expect(series != null);
+        try std.testing.expectEqual(@as(usize, 5), series.?.points.items.len);
+
+        // Verify ordering preserved.
+        try std.testing.expectEqual(@as(i64, 1000), series.?.points.items[0].ts);
+        try std.testing.expectEqual(@as(i64, 10), series.?.points.items[0].value);
+    }
+}
+
+test "store: retention integration with persistence" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_retention_{d}", .{pid}) catch unreachable;
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var st = try Store.initWithConfig(allocator, .{
+        .data_dir = test_dir,
+        .chunk_config = .{ .retention_days = 1, .max_points_per_chunk = 5 },
+    });
+    defer st.deinit();
+
+    const current_time: i64 = 1_000_000_000;
+    const day_ms: i64 = 24 * 60 * 60 * 1000;
+
+    // Insert old data (2 days ago) and recent data.
+    const key = SeriesKey{ .device_id = 1, .metric = "disk" };
+    try st.insertMany(key, &.{
+        .{ .ts = current_time - 2 * day_ms, .value = 1 },
+        .{ .ts = current_time - 1000, .value = 2 },
+    });
+
+    // Force flush.
+    try st.sync();
+
+    // Run retention.
+    try st.runRetention(current_time);
+
+    // After retention, querying from chunk storage should only find the recent chunk.
+    const cs = st.chunk_store.?;
+    try std.testing.expectEqual(@as(usize, 1), cs.chunks.items.len);
+}
+
+test "store: sync flushes unflushed data" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_sync_{d}", .{pid}) catch unreachable;
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    var st = try Store.initWithConfig(allocator, .{
+        .data_dir = test_dir,
+        .chunk_config = .{ .max_points_per_chunk = 100000 },
+    });
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 1, .metric = "mem" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 100 },
+        .{ .ts = 2000, .value = 200 },
+    });
+
+    // Before sync, ChunkStorage should have no chunks (threshold not reached).
+    try std.testing.expectEqual(@as(usize, 0), st.chunk_store.?.chunks.items.len);
+
+    // After sync, data should be persisted.
+    try st.sync();
+    try std.testing.expectEqual(@as(usize, 1), st.chunk_store.?.chunks.items.len);
+}
+
+test "store: init backward compat — in-memory only" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 99, .metric = "test" };
+    try st.insertMany(key, &.{
+        .{ .ts = 500, .value = 5 },
+        .{ .ts = 600, .value = 6 },
+    });
+
+    const l = st.last(key).?;
+    try std.testing.expectEqual(@as(i64, 600), l.ts);
+    try std.testing.expect(st.chunk_store == null);
 }
