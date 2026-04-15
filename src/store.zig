@@ -22,7 +22,7 @@ pub const SeriesKey = struct { device_id: i64, metric: []const u8 };
 /// Time-series data structure.
 pub const Series = struct {
     key: SeriesKey,
-    points: std.ArrayList(Point) = .{ .items = &.{}, .capacity = 0, .allocator = undefined },
+    points: std.ArrayListUnmanaged(Point) = .empty,
 
     /// Returns the number of points in the series.
     pub fn len(self: *const Series) usize {
