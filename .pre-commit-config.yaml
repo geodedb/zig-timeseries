@@ -86,7 +86,7 @@ repos:
 
       - id: check-todos
         name: check TODOs
-        entry: bash -c 'if grep -rn "TODO\|FIXME\|HACK\|XXX" src/ tests/ --include="*.zig" 2>/dev/null; then echo "Warning: Found TODO/FIXME markers"; fi; exit 0'
+        entry: "bash -c 'if grep -rn \"TODO\\|FIXME\\|HACK\\|XXX\" src/ tests/ --include=\"*.zig\" 2>/dev/null; then echo \"Warning: Found TODO/FIXME markers\"; fi; exit 0'"
         language: system
         pass_filenames: false
         verbose: true
