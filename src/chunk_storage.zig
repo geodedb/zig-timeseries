@@ -403,7 +403,7 @@ pub const ChunkStorage = struct {
     config: ChunkConfig,
     chunks: std.ArrayList(ChunkMeta),
     index: std.AutoHashMap(u64, std.ArrayList(usize)),
-    data_file: ?std.fs.File,
+    data_file: ?std.Io.File,
     data_dir: []const u8,
 
     pub const InitError = error{InvalidPath};
