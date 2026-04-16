@@ -2,10 +2,15 @@
 // Copyright (c) 2024-2025 CodePros
 
 //! Chunk storage with Gorilla compression for time-series data.
-//! Ported from Geode's chunk_storage.zig with Zig 0.15 API fixes.
+//! Ported from Geode's chunk_storage.zig with Zig 0.16.0 API fixes.
 
 const std = @import("std");
 const store = @import("store.zig");
+
+/// Helper to obtain a global single-threaded I/O context for file operations.
+inline fn gio() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 
 /// Gorilla-inspired compression for time-series data.
 pub const ChunkConfig = struct {
@@ -404,6 +409,7 @@ pub const ChunkStorage = struct {
     chunks: std.ArrayList(ChunkMeta),
     index: std.AutoHashMap(u64, std.ArrayList(usize)),
     data_file: ?std.Io.File,
+    data_offset: u64,
     data_dir: []const u8,
 
     pub const InitError = error{InvalidPath};
@@ -412,23 +418,20 @@ pub const ChunkStorage = struct {
         // Reject path traversal attempts.
         if (std.mem.indexOf(u8, data_dir, "..") != null) return error.InvalidPath;
 
-        std.fs.cwd().makePath(data_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            else => return err,
-        };
+        const io = gio();
+        // Ensure the data directory exists.
+        std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
 
         const chunks_path = try std.fmt.allocPrint(allocator, "{s}/chunks.dat", .{data_dir});
         defer allocator.free(chunks_path);
 
-        const file = try std.fs.cwd().createFile(chunks_path, .{
+        const file = try std.Io.Dir.cwd().createFile(io, chunks_path, .{
             .read = true,
             .truncate = false,
-            .mode = 0o600,
         });
 
-        // Seek to end so new writes append after existing data.
-        const end_pos = try file.getEndPos();
-        try file.seekTo(end_pos);
+        // Determine current file length so new writes append after existing data.
+        const end_pos = file.length(io) catch 0;
 
         var self = ChunkStorage{
             .allocator = allocator,
@@ -436,6 +439,7 @@ pub const ChunkStorage = struct {
             .chunks = .{},
             .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
             .data_file = file,
+            .data_offset = end_pos,
             .data_dir = try allocator.dupe(u8, data_dir),
         };
 
@@ -454,7 +458,7 @@ pub const ChunkStorage = struct {
         self.index.deinit();
         self.chunks.deinit(self.allocator);
         if (self.data_file) |file| {
-            file.close();
+            file.close(gio());
         }
         self.allocator.free(self.data_dir);
     }
@@ -481,11 +485,12 @@ pub const ChunkStorage = struct {
             .compressed_size = @intCast(compressed.len),
             .uncompressed_size = @intCast(points.len * @sizeOf(store.Point)),
             .compression = self.config.compression_algorithm,
-            .page_offset = if (self.data_file) |f| try f.getPos() else 0,
+            .page_offset = self.data_offset,
         };
 
         if (self.data_file) |file| {
-            _ = try file.write(compressed);
+            try file.writePositionalAll(gio(), compressed, self.data_offset);
+            self.data_offset += compressed.len;
         }
 
         const chunk_idx = self.chunks.items.len;
@@ -524,8 +529,7 @@ pub const ChunkStorage = struct {
             const compressed = try allocator.alloc(u8, chunk.compressed_size);
             defer allocator.free(compressed);
 
-            try file.seekTo(chunk.page_offset);
-            const bytes_read = try file.readAll(compressed);
+            const bytes_read = file.readPositionalAll(gio(), compressed, chunk.page_offset) catch continue;
             if (bytes_read != chunk.compressed_size) continue;
 
             // Decompress and filter to requested range.
@@ -622,19 +626,18 @@ pub const ChunkStorage = struct {
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = try std.fs.cwd().createFile(meta_path, .{
+        const io = gio();
+        const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
             .read = true,
             .truncate = false,
-            .mode = 0o600,
         });
-        defer file.close();
+        defer file.close(io);
 
-        const end_pos = try file.getEndPos();
-        try file.seekTo(end_pos);
+        const end_pos = file.length(io) catch 0;
 
         var buf: [chunk_meta_size]u8 = undefined;
         serializeChunkMeta(&buf, meta);
-        _ = try file.write(&buf);
+        try file.writePositionalAll(io, &buf, end_pos);
     }
 
     /// Load all ChunkMeta records from chunk_meta.dat and rebuild the in-memory index.
@@ -642,13 +645,16 @@ pub const ChunkStorage = struct {
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = std.fs.cwd().openFile(meta_path, .{}) catch return; // No metadata yet.
-        defer file.close();
+        const io = gio();
+        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return; // No metadata yet.
+        defer file.close(io);
 
+        var read_off: u64 = 0;
         while (true) {
             var buf: [chunk_meta_size]u8 = undefined;
-            const n = file.readAll(&buf) catch break;
+            const n = file.readPositionalAll(io, &buf, read_off) catch break;
             if (n < chunk_meta_size) break;
+            read_off += n;
 
             const meta = deserializeChunkMeta(&buf);
             const chunk_idx = self.chunks.items.len;
