@@ -499,7 +499,7 @@ pub const ChunkStorage = struct {
         // Update the series index.
         const gop = try self.index.getOrPut(series_id);
         if (!gop.found_existing) {
-            gop.value_ptr.* = .{};
+            gop.value_ptr.* = .empty;
         }
         try gop.value_ptr.append(self.allocator, chunk_idx);
 
