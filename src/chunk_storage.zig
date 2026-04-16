@@ -389,7 +389,7 @@ pub const GorillaDecoder = struct {
 
     /// Decode all points from the compressed bitstream.
     pub fn decodeAll(self: *GorillaDecoder, allocator: std.mem.Allocator) ![]store.Point {
-        var points: std.ArrayList(store.Point) = .{};
+        var points: std.ArrayList(store.Point) = .empty;
         errdefer points.deinit(allocator);
         try points.ensureTotalCapacity(allocator, self.num_points);
 
@@ -436,7 +436,7 @@ pub const ChunkStorage = struct {
         var self = ChunkStorage{
             .allocator = allocator,
             .config = config,
-            .chunks = .{},
+            .chunks = .empty,
             .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
             .data_file = file,
             .data_offset = end_pos,
@@ -517,7 +517,7 @@ pub const ChunkStorage = struct {
     ) ![]store.Point {
         const list = self.index.get(series_id) orelse return &.{};
 
-        var results: std.ArrayList(store.Point) = .{};
+        var results: std.ArrayList(store.Point) = .empty;
         errdefer results.deinit(allocator);
 
         for (list.items) |idx| {
@@ -552,7 +552,7 @@ pub const ChunkStorage = struct {
         const retention_ms = @as(i64, self.config.retention_days) * 24 * 60 * 60 * 1000;
         const cutoff_time = current_time - retention_ms;
 
-        var new_chunks: std.ArrayList(ChunkMeta) = .{};
+        var new_chunks: std.ArrayList(ChunkMeta) = .empty;
 
         // Clear index.
         var it = self.index.valueIterator();
@@ -569,7 +569,7 @@ pub const ChunkStorage = struct {
 
                 const gop = try self.index.getOrPut(chunk.series_id);
                 if (!gop.found_existing) {
-                    gop.value_ptr.* = .{};
+                    gop.value_ptr.* = .empty;
                 }
                 try gop.value_ptr.append(self.allocator, new_chunks.items.len - 1);
             }
@@ -662,7 +662,7 @@ pub const ChunkStorage = struct {
 
             const gop = try self.index.getOrPut(meta.series_id);
             if (!gop.found_existing) {
-                gop.value_ptr.* = .{};
+                gop.value_ptr.* = .empty;
             }
             try gop.value_ptr.append(self.allocator, chunk_idx);
         }
@@ -728,12 +728,12 @@ test "chunk_storage: compression and stats" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_chunks_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
 
-    var points: std.ArrayList(store.Point) = .{};
+    var points: std.ArrayList(store.Point) = .empty;
     defer points.deinit(ally);
 
     var i: i64 = 0;
@@ -758,7 +758,7 @@ test "chunk_storage: retention" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_retention_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
     defer storage.deinit();
@@ -851,13 +851,13 @@ test "chunk_storage: queryRange round-trip" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_rt_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
 
     // Write 100 points.
-    var points: std.ArrayList(store.Point) = .{};
+    var points: std.ArrayList(store.Point) = .empty;
     defer points.deinit(ally);
 
     var i: i64 = 0;
@@ -887,7 +887,7 @@ test "chunk_storage: queryRange partial range" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_pr_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
@@ -916,7 +916,7 @@ test "chunk_storage: queryRange nonexistent series" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_query_ne_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
@@ -1005,7 +1005,7 @@ test "chunk_storage: valid path accepted" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_valid_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();

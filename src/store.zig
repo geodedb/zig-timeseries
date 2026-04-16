@@ -170,7 +170,7 @@ pub const Store = struct {
                 .device_id = key.device_id,
                 .metric = try self.allocator.dupe(u8, key.metric),
             },
-            .points = .{},
+            .points = .empty,
         };
         try self.by_key.put(hk, s);
         return s;
@@ -465,90 +465,99 @@ pub const Store = struct {
     /// loadFromDisk can reconstruct SeriesKey from a chunk series_id.
     fn saveSeriesKeyMeta(self: *Store, key: SeriesKey, chunk_id: u64) !void {
         const cs = self.chunk_store orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
         // Append-only: open for appending, create if needed.
-        const file = try std.fs.cwd().createFile(meta_path, .{
+        const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
             .read = true,
             .truncate = false,
-            .mode = 0o600,
         });
-        defer file.close();
+        defer file.close(io);
 
         // Check if this chunk_id is already in the file to avoid duplicates.
-        try file.seekTo(0);
+        var pos: u64 = 0;
         while (true) {
             var id_buf: [8]u8 = undefined;
-            const id_read = file.readAll(&id_buf) catch break;
+            const id_read = file.readPositionalAll(io, &id_buf, pos) catch break;
             if (id_read < 8) break;
+            pos += id_read;
             const existing_id = std.mem.readInt(u64, &id_buf, .little);
 
             var dev_buf: [8]u8 = undefined;
-            const dev_read = file.readAll(&dev_buf) catch break;
+            const dev_read = file.readPositionalAll(io, &dev_buf, pos) catch break;
             if (dev_read < 8) break;
+            pos += dev_read;
 
             var len_buf: [4]u8 = undefined;
-            const len_read = file.readAll(&len_buf) catch break;
+            const len_read = file.readPositionalAll(io, &len_buf, pos) catch break;
             if (len_read < 4) break;
+            pos += len_read;
             const metric_len = std.mem.readInt(u32, &len_buf, .little);
 
             // Skip metric bytes.
-            const pos = try file.getPos();
-            try file.seekTo(pos + metric_len);
+            pos += metric_len;
 
             if (existing_id == chunk_id) return; // Already stored.
         }
 
-        // Seek to end and append.
-        const final_end = try file.getEndPos();
-        try file.seekTo(final_end);
+        // Append at end of file.
+        var write_pos = file.length(io) catch 0;
 
         // Write: chunk_id (8) | device_id (8) | metric_len (4) | metric (N).
         var id_bytes: [8]u8 = undefined;
         std.mem.writeInt(u64, &id_bytes, chunk_id, .little);
-        _ = try file.write(&id_bytes);
+        try file.writePositionalAll(io, &id_bytes, write_pos);
+        write_pos += 8;
 
         var dev_bytes: [8]u8 = undefined;
         std.mem.writeInt(i64, &dev_bytes, key.device_id, .little);
-        _ = try file.write(&dev_bytes);
+        try file.writePositionalAll(io, &dev_bytes, write_pos);
+        write_pos += 8;
 
         var len_bytes: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_bytes, @intCast(key.metric.len), .little);
-        _ = try file.write(&len_bytes);
+        try file.writePositionalAll(io, &len_bytes, write_pos);
+        write_pos += 4;
 
-        _ = try file.write(key.metric);
+        try file.writePositionalAll(io, key.metric, write_pos);
     }
 
     /// Load all series key metadata entries into chunk_id_to_hash map.
     fn loadAllSeriesKeyMeta(self: *Store) !void {
         const cs = self.chunk_store orelse return;
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = std.fs.cwd().openFile(meta_path, .{}) catch return;
-        defer file.close();
+        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return;
+        defer file.close(io);
 
+        var pos: u64 = 0;
         while (true) {
             var id_buf: [8]u8 = undefined;
-            const id_read = file.readAll(&id_buf) catch break;
+            const id_read = file.readPositionalAll(io, &id_buf, pos) catch break;
             if (id_read < 8) break;
+            pos += id_read;
             const chunk_id = std.mem.readInt(u64, &id_buf, .little);
 
             var dev_buf: [8]u8 = undefined;
-            const dev_read = file.readAll(&dev_buf) catch break;
+            const dev_read = file.readPositionalAll(io, &dev_buf, pos) catch break;
             if (dev_read < 8) break;
+            pos += dev_read;
             const device_id = std.mem.readInt(i64, &dev_buf, .little);
 
             var len_buf: [4]u8 = undefined;
-            const len_read = file.readAll(&len_buf) catch break;
+            const len_read = file.readPositionalAll(io, &len_buf, pos) catch break;
             if (len_read < 4) break;
+            pos += len_read;
             const metric_len = std.mem.readInt(u32, &len_buf, .little);
 
             const metric = try self.allocator.alloc(u8, metric_len);
-            const m_read = file.readAll(metric) catch {
+            const m_read = file.readPositionalAll(io, metric, pos) catch {
                 self.allocator.free(metric);
                 break;
             };
@@ -556,6 +565,7 @@ pub const Store = struct {
                 self.allocator.free(metric);
                 break;
             }
+            pos += m_read;
 
             // Compute the hash and register the mapping.
             const key = SeriesKey{ .device_id = device_id, .metric = metric };
@@ -569,31 +579,36 @@ pub const Store = struct {
     /// Read a specific series key from the metadata file given a chunk_id.
     fn readSeriesKeyForChunkId(self: *Store, target_chunk_id: u64) !?SeriesKey {
         const cs = self.chunk_store orelse return null;
+        const io = std.Io.Threaded.global_single_threaded.io();
 
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = std.fs.cwd().openFile(meta_path, .{}) catch return null;
-        defer file.close();
+        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return null;
+        defer file.close(io);
 
+        var pos: u64 = 0;
         while (true) {
             var id_buf: [8]u8 = undefined;
-            const id_read = file.readAll(&id_buf) catch break;
+            const id_read = file.readPositionalAll(io, &id_buf, pos) catch break;
             if (id_read < 8) break;
+            pos += id_read;
             const chunk_id = std.mem.readInt(u64, &id_buf, .little);
 
             var dev_buf: [8]u8 = undefined;
-            const dev_read = file.readAll(&dev_buf) catch break;
+            const dev_read = file.readPositionalAll(io, &dev_buf, pos) catch break;
             if (dev_read < 8) break;
+            pos += dev_read;
             const device_id = std.mem.readInt(i64, &dev_buf, .little);
 
             var len_buf: [4]u8 = undefined;
-            const len_read = file.readAll(&len_buf) catch break;
+            const len_read = file.readPositionalAll(io, &len_buf, pos) catch break;
             if (len_read < 4) break;
+            pos += len_read;
             const metric_len = std.mem.readInt(u32, &len_buf, .little);
 
             const metric = try self.allocator.alloc(u8, metric_len);
-            const m_read = file.readAll(metric) catch {
+            const m_read = file.readPositionalAll(io, metric, pos) catch {
                 self.allocator.free(metric);
                 break;
             };
@@ -601,6 +616,7 @@ pub const Store = struct {
                 self.allocator.free(metric);
                 break;
             }
+            pos += m_read;
 
             if (chunk_id == target_chunk_id) {
                 return SeriesKey{ .device_id = device_id, .metric = metric };
@@ -769,7 +785,7 @@ test "store: persist-restart-query round-trip" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_persist_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     const key = SeriesKey{ .device_id = 42, .metric = "cpu_temp" };
 
@@ -823,7 +839,7 @@ test "store: retention integration with persistence" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_retention_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var st = try Store.initWithConfig(allocator, .{
         .data_dir = test_dir,
@@ -858,7 +874,7 @@ test "store: sync flushes unflushed data" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_sync_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var st = try Store.initWithConfig(allocator, .{
         .data_dir = test_dir,

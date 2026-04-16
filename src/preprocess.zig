@@ -146,7 +146,7 @@ pub fn markGaps(
 ) ![]const [2]usize {
     if (times.len < 2) return &.{};
 
-    var gaps: std.ArrayList([2]usize) = .{};
+    var gaps: std.ArrayList([2]usize) = .empty;
 
     var gap_start: ?usize = null;
     for (0..times.len - 1) |i| {
