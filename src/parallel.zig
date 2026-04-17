@@ -427,12 +427,123 @@ pub fn parallelMpDistAbJoin(
     b: []const f64,
     window_len: usize,
     batch_options: BatchOptions,
-) (TsError || error{OutOfMemory})!f64 {
-    _ = allocator;
-    _ = pool;
-    _ = a;
-    _ = b;
-    _ = window_len;
-    _ = batch_options;
-    @panic("parallelMpDistAbJoin: not implemented");
+) TsError!f64 {
+    const n = a.len;
+    const m = b.len;
+    if (n == 0 or m == 0 or window_len == 0) return TsError.InvalidInput;
+    if (window_len > n or window_len > m) return TsError.InvalidInput;
+
+    const w = window_len;
+    const plen_a = n - w + 1;
+    const plen_b = m - w + 1;
+
+    const ab_buf = try allocator.alloc(f64, plen_a);
+    defer allocator.free(ab_buf);
+
+    const means_a = try allocator.alloc(f64, plen_a);
+    defer allocator.free(means_a);
+    const stds_a = try allocator.alloc(f64, plen_a);
+    defer allocator.free(stds_a);
+    const means_b = try allocator.alloc(f64, plen_b);
+    defer allocator.free(means_b);
+    const stds_b = try allocator.alloc(f64, plen_b);
+    defer allocator.free(stds_b);
+
+    matrix_profile_mod.precomputeStats(a, w, means_a, stds_a);
+    matrix_profile_mod.precomputeStats(b, w, means_b, stds_b);
+
+    if (pool == null or plen_a == 1) {
+        for (0..plen_a) |i| {
+            ab_buf[i] = matrix_profile_mod.mpDistAbJoinRow(
+                a,
+                b,
+                means_a,
+                stds_a,
+                means_b,
+                stds_b,
+                i,
+                w,
+            );
+        }
+    } else {
+        const chunk_size = if (batch_options.chunk_size == 0) default_chunk_size else batch_options.chunk_size;
+        const p = pool.?;
+        const n_chunks = (plen_a + chunk_size - 1) / chunk_size;
+
+        const ctxs = try allocator.alloc(MpRowChunkCtx, n_chunks);
+        defer allocator.free(ctxs);
+
+        var wg = p.waitGroup();
+
+        var i: usize = 0;
+        var ci: usize = 0;
+        while (i < plen_a) : (ci += 1) {
+            const end = @min(i + chunk_size, plen_a);
+            ctxs[ci] = .{
+                .a = a,
+                .b = b,
+                .means_a = means_a,
+                .stds_a = stds_a,
+                .means_b = means_b,
+                .stds_b = stds_b,
+                .row_lo = i,
+                .row_hi = end,
+                .w = w,
+                .out = ab_buf,
+                .wg = &wg,
+            };
+            i = end;
+        }
+        wg.add(@intCast(n_chunks));
+
+        for (ctxs, 0..) |*c, k| {
+            _ = p.submit(mpRowChunkTask, c, .{ .lane = batch_options.lane }) catch {
+                for (ctxs[k..]) |*rest| {
+                    mpRowChunkInline(rest);
+                    rest.wg.done();
+                }
+                break;
+            };
+        }
+        wg.wait();
+    }
+
+    std.mem.sort(f64, ab_buf, {}, std.sort.asc(f64));
+    const k = @max(@as(usize, 1), plen_a * 5 / 100);
+    return ab_buf[k - 1];
+}
+
+const MpRowChunkCtx = struct {
+    a: []const f64,
+    b: []const f64,
+    means_a: []const f64,
+    stds_a: []const f64,
+    means_b: []const f64,
+    stds_b: []const f64,
+    row_lo: usize,
+    row_hi: usize,
+    w: usize,
+    out: []f64,
+    wg: *tp.WaitGroup,
+};
+
+fn mpRowChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
+    const c: *MpRowChunkCtx = @ptrCast(@alignCast(ctx_));
+    mpRowChunkInline(c);
+    c.wg.done();
+}
+
+fn mpRowChunkInline(c: *MpRowChunkCtx) void {
+    for (c.row_lo..c.row_hi) |i| {
+        c.out[i] = matrix_profile_mod.mpDistAbJoinRow(
+            c.a,
+            c.b,
+            c.means_a,
+            c.stds_a,
+            c.means_b,
+            c.stds_b,
+            i,
+            c.w,
+        );
+    }
 }

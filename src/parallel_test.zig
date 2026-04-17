@@ -173,3 +173,61 @@ test "parallelBatchDistances SBD: matches per-pair serial" {
         try std.testing.expectApproxEqAbs(expected, out[idx].ok, 1e-9);
     }
 }
+
+test "parallelMpDistAbJoin: matches serial mpDist" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 4 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const n: usize = 256;
+    const a = try allocator.alloc(f64, n);
+    defer allocator.free(a);
+    const b = try allocator.alloc(f64, n);
+    defer allocator.free(b);
+    for (a, 0..) |*v, i| v.* = @sin(@as(f64, @floatFromInt(i)) * 0.05);
+    for (b, 0..) |*v, i| v.* = @cos(@as(f64, @floatFromInt(i)) * 0.05);
+
+    const w: usize = 16;
+    const expected = try ts.matrix_profile.mpDist(allocator, a, b, w);
+    const got = try parallel.parallelMpDistAbJoin(allocator, &pool, a, b, w, .{ .chunk_size = 8 });
+    try std.testing.expectApproxEqAbs(expected, got, 1e-9);
+}
+
+test "parallelMpDistAbJoin: large series (n=1024) matches serial within epsilon" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 8 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const n: usize = 1024;
+    const a = try allocator.alloc(f64, n);
+    defer allocator.free(a);
+    const b = try allocator.alloc(f64, n);
+    defer allocator.free(b);
+    // Deterministic pseudo-random: linear congruential generator.
+    var state: u64 = 0xdeadbeef;
+    for (a) |*v| {
+        state = state *% 6364136223846793005 +% 1442695040888963407;
+        v.* = @as(f64, @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(state)))))) / 1e9;
+    }
+    for (b) |*v| {
+        state = state *% 6364136223846793005 +% 1442695040888963407;
+        v.* = @as(f64, @floatFromInt(@as(i32, @truncate(@as(i64, @bitCast(state)))))) / 1e9;
+    }
+
+    const w: usize = 32;
+    const expected = try ts.matrix_profile.mpDist(allocator, a, b, w);
+    const got = try parallel.parallelMpDistAbJoin(allocator, &pool, a, b, w, .{ .chunk_size = 32 });
+    try std.testing.expectApproxEqAbs(expected, got, 1e-6);
+}
