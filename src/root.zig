@@ -40,6 +40,8 @@ pub const store = @import("store.zig");
 pub const chunk_storage = @import("chunk_storage.zig");
 pub const spectral = @import("spectral.zig");
 pub const anomaly = @import("anomaly.zig");
+/// Parallel batch entry points (requires `thread_pool`).
+pub const parallel = @import("parallel.zig");
 
 // Re-export core types at top level.
 pub const Gap = types.Gap;
@@ -91,4 +93,5 @@ test {
     _ = @import("types_test.zig");
     _ = @import("spectral_test.zig");
     _ = @import("anomaly_test.zig");
+    _ = @import("parallel_test.zig");
 }
