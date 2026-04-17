@@ -100,7 +100,7 @@ inline fn qtToZnormDist(
 }
 
 /// Precompute subsequence means and standard deviations using cumulative sums.
-fn precomputeStats(
+pub fn precomputeStats(
     values: []const f64,
     w: usize,
     means: []f64,
@@ -245,6 +245,35 @@ pub fn matrixProfile(
     return MatrixProfileResult{ .profile = profile, .indices = indices };
 }
 
+/// Compute the best distance for a single `i` row of the AB-join matrix
+/// profile between series `a` (with precomputed stats) and `b` (with
+/// precomputed stats). Pure function — reads only the provided slices.
+/// Exposed so `parallel.parallelMpDistAbJoin` can compute rows
+/// independently across workers without duplicating the logic.
+pub fn mpDistAbJoinRow(
+    a: []const f64,
+    b: []const f64,
+    means_a: []const f64,
+    stds_a: []const f64,
+    means_b: []const f64,
+    stds_b: []const f64,
+    i: usize,
+    window_len: usize,
+) f64 {
+    const w = window_len;
+    const plen_b = means_b.len;
+    var best: f64 = math.inf(f64);
+    for (0..plen_b) |j| {
+        var dp: f64 = 0;
+        for (0..w) |k| {
+            dp += a[i + k] * b[j + k];
+        }
+        const dist = qtToZnormDist(dp, means_a[i], stds_a[i], means_b[j], stds_b[j], w);
+        if (dist < best) best = dist;
+    }
+    return best;
+}
+
 /// MP-based distance between two series using the AB-join matrix profile.
 /// Returns the k-th smallest value in the AB-join profile where k = floor(plen * 0.05).
 pub fn mpDist(
@@ -279,16 +308,7 @@ pub fn mpDist(
     precomputeStats(b, w, means_b, stds_b);
 
     for (0..plen_a) |i| {
-        var best: f64 = math.inf(f64);
-        for (0..plen_b) |j| {
-            var dp: f64 = 0;
-            for (0..w) |k| {
-                dp += a[i + k] * b[j + k];
-            }
-            const dist = qtToZnormDist(dp, means_a[i], stds_a[i], means_b[j], stds_b[j], w);
-            if (dist < best) best = dist;
-        }
-        ab_buf[i] = best;
+        ab_buf[i] = mpDistAbJoinRow(a, b, means_a, stds_a, means_b, stds_b, i, w);
     }
 
     std.mem.sort(f64, ab_buf, {}, std.sort.asc(f64));
