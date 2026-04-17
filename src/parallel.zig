@@ -79,9 +79,14 @@ pub const DistanceOptions = struct {
     metric: DistanceMetric = .sbd,
     /// LCSS / EDR threshold.
     epsilon: f64 = 0.1,
+    /// LCSS Sakoe-Chiba band width (0 = unconstrained).
+    delta: usize = 0,
     /// ERP gap penalty reference value.
     erp_gap: f64 = 0.0,
-    /// TWED stiffness.
+    /// TWED stiffness. NOTE: TWED is NOT supported via
+    /// `parallelBatchDistances` because it requires per-timestep time
+    /// vectors that don't fit the `(query, candidates[])` batch shape.
+    /// Use `twed` directly for single-pair TWED.
     twed_nu: f64 = 0.001,
     twed_lambda: f64 = 1.0,
 };
@@ -302,8 +307,11 @@ fn lbKeoghChunkInline(c: *LbKeoghChunkCtx) void {
     }
 }
 
-/// Batch non-DTW distances. Covers sbd/lcss/edr/erp/twed. For
+/// Batch non-DTW distances. Covers sbd/lcss/edr/erp. For
 /// cross-correlation use `parallelBatchCrossCorrelate`.
+/// NOTE: `.twed` returns `.err = TsError.InvalidInput` — TWED requires
+/// per-timestep time vectors that don't fit the `(query, candidates[])`
+/// batch shape. Use `distances.twed` directly for single-pair TWED.
 pub fn parallelBatchDistances(
     allocator: std.mem.Allocator,
     pool: ?*tp.ThreadPool,
@@ -313,14 +321,100 @@ pub fn parallelBatchDistances(
     options: DistanceOptions,
     batch_options: BatchOptions,
 ) !usize {
-    _ = allocator;
-    _ = pool;
-    _ = query;
-    _ = candidates;
-    _ = out_results;
-    _ = options;
-    _ = batch_options;
-    @panic("parallelBatchDistances: not implemented");
+    std.debug.assert(out_results.len == candidates.len);
+    if (candidates.len == 0) return 0;
+
+    if (pool == null or candidates.len == 1) {
+        var ok_count: usize = 0;
+        for (candidates, 0..) |c, idx| {
+            out_results[idx] = runDistanceOne(allocator, query, c, options);
+            if (out_results[idx] == .ok) ok_count += 1;
+        }
+        return ok_count;
+    }
+
+    const chunk_size = if (batch_options.chunk_size == 0) default_chunk_size else batch_options.chunk_size;
+    const p = pool.?;
+    const n_chunks = (candidates.len + chunk_size - 1) / chunk_size;
+
+    const ctxs = try allocator.alloc(DistanceChunkCtx, n_chunks);
+    defer allocator.free(ctxs);
+
+    var wg = p.waitGroup();
+
+    var i: usize = 0;
+    var ci: usize = 0;
+    while (i < candidates.len) : (ci += 1) {
+        const end = @min(i + chunk_size, candidates.len);
+        ctxs[ci] = .{
+            .allocator = allocator,
+            .query = query,
+            .candidates = candidates[i..end],
+            .out_slice = out_results[i..end],
+            .options = options,
+            .wg = &wg,
+        };
+        i = end;
+    }
+    wg.add(@intCast(n_chunks));
+
+    for (ctxs, 0..) |*c, k| {
+        _ = p.submit(distanceChunkTask, c, .{ .lane = batch_options.lane }) catch {
+            for (ctxs[k..]) |*rest| {
+                distanceChunkInline(rest);
+                rest.wg.done();
+            }
+            break;
+        };
+    }
+    wg.wait();
+
+    var ok_count: usize = 0;
+    for (out_results) |r| if (r == .ok) {
+        ok_count += 1;
+    };
+    return ok_count;
+}
+
+fn runDistanceOne(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+    options: DistanceOptions,
+) BatchResult(f64) {
+    const d: f64 = switch (options.metric) {
+        .sbd => distances_mod.sbd(a, b) catch |e| return .{ .err = mapTsError(e) },
+        .lcss => distances_mod.lcss(allocator, a, b, options.epsilon, options.delta) catch |e|
+            return .{ .err = mapTsError(e) },
+        .edr => distances_mod.edr(allocator, a, b, options.epsilon) catch |e|
+            return .{ .err = mapTsError(e) },
+        .erp => distances_mod.erp(allocator, a, b, options.erp_gap) catch |e|
+            return .{ .err = mapTsError(e) },
+        .twed => return .{ .err = TsError.InvalidInput }, // TWED requires paired time vectors; not supported via batch API
+        .cross_correlate => return .{ .err = TsError.InvalidInput }, // wrong entry point — use parallelBatchCrossCorrelate if needed
+    };
+    return .{ .ok = d };
+}
+
+const DistanceChunkCtx = struct {
+    allocator: std.mem.Allocator,
+    query: []const f64,
+    candidates: []const []const f64,
+    out_slice: []BatchResult(f64),
+    options: DistanceOptions,
+    wg: *tp.WaitGroup,
+};
+
+fn distanceChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
+    const c: *DistanceChunkCtx = @ptrCast(@alignCast(ctx_));
+    distanceChunkInline(c);
+    c.wg.done();
+}
+
+fn distanceChunkInline(c: *DistanceChunkCtx) void {
+    for (c.candidates, 0..) |cand, idx| {
+        c.out_slice[idx] = runDistanceOne(c.allocator, c.query, cand, c.options);
+    }
 }
 
 /// Parallel AB-join MP-distance. `a` and `b` are both non-empty series

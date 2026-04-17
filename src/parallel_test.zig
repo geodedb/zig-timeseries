@@ -134,3 +134,42 @@ test "parallelBatchLbKeogh: matches per-pair serial" {
         try std.testing.expectApproxEqAbs(expected, out[idx], 1e-12);
     }
 }
+
+test "parallelBatchDistances SBD: matches per-pair serial" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const query = [_]f64{ 1, 2, 3, 4, 5, 4, 3, 2, 1 };
+    var cand_bufs: [6][9]f64 = undefined;
+    for (&cand_bufs, 0..) |*b, k| {
+        for (b, 0..) |*v, i|
+            v.* = @as(f64, @floatFromInt(i)) + @as(f64, @floatFromInt(k)) * 0.5;
+    }
+
+    var candidates: [6][]const f64 = undefined;
+    for (&cand_bufs, 0..) |*b, i| candidates[i] = b[0..];
+
+    var out: [6]parallel.BatchResult(f64) = undefined;
+    const ok = try parallel.parallelBatchDistances(
+        allocator,
+        &pool,
+        &query,
+        candidates[0..],
+        &out,
+        .{ .metric = .sbd },
+        .{ .chunk_size = 2 },
+    );
+    try std.testing.expectEqual(@as(usize, 6), ok);
+
+    for (candidates, 0..) |c, idx| {
+        const expected = try ts.distances.sbd(&query, c);
+        try std.testing.expectApproxEqAbs(expected, out[idx].ok, 1e-9);
+    }
+}
