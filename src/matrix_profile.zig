@@ -23,7 +23,7 @@ const MatrixProfileResult = types.MatrixProfileResult;
 const TsError = types.TsError;
 
 /// Maximum series length for matrix profile operations to prevent CPU DoS.
-const MAX_SERIES_LEN: usize = 100_000;
+pub const MAX_SERIES_LEN: usize = 100_000;
 
 /// Threshold below which a standard deviation is treated as zero (constant subsequence).
 const STD_EPS: f64 = 1e-10;

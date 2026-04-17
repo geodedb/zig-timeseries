@@ -231,3 +231,21 @@ test "parallelMpDistAbJoin: large series (n=1024) matches serial within epsilon"
     const got = try parallel.parallelMpDistAbJoin(allocator, &pool, a, b, w, .{ .chunk_size = 32 });
     try std.testing.expectApproxEqAbs(expected, got, 1e-6);
 }
+
+test "parallelMpDistAbJoin: rejects oversized series" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Allocate a series larger than MAX_SERIES_LEN (100_000) — just barely.
+    const n: usize = 100_001;
+    const a = try allocator.alloc(f64, n);
+    defer allocator.free(a);
+    const b = try allocator.alloc(f64, n);
+    defer allocator.free(b);
+    @memset(a, 0);
+    @memset(b, 0);
+
+    const result = parallel.parallelMpDistAbJoin(allocator, null, a, b, 16, .{});
+    try std.testing.expectError(ts.TsError.SeriesTooLong, result);
+}

@@ -432,6 +432,7 @@ pub fn parallelMpDistAbJoin(
     const m = b.len;
     if (n == 0 or m == 0 or window_len == 0) return TsError.InvalidInput;
     if (window_len > n or window_len > m) return TsError.InvalidInput;
+    if (n > matrix_profile_mod.MAX_SERIES_LEN or m > matrix_profile_mod.MAX_SERIES_LEN) return TsError.SeriesTooLong;
 
     const w = window_len;
     const plen_a = n - w + 1;
