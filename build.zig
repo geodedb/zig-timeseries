@@ -7,11 +7,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const thread_pool_dep = b.dependency("thread_pool", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const thread_pool_module = thread_pool_dep.module("thread_pool");
+
     // Main library module (for Zig consumers).
     const module = b.addModule("timeseries", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "thread_pool", .module = thread_pool_module },
+        },
     });
 
     // Shared library for C ABI consumers (Go CGO, Python ctypes, etc.).
@@ -48,6 +57,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "thread_pool", .module = thread_pool_module },
+            },
         }),
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -62,6 +74,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "timeseries", .module = module },
+                .{ .name = "thread_pool", .module = thread_pool_module },
             },
         }),
     });
@@ -77,6 +90,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "timeseries", .module = module },
+                .{ .name = "thread_pool", .module = thread_pool_module },
             },
         }),
     });
@@ -93,6 +107,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseFast,
             .imports = &.{
                 .{ .name = "timeseries", .module = module },
+                .{ .name = "thread_pool", .module = thread_pool_module },
             },
         }),
     });
@@ -106,6 +121,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "thread_pool", .module = thread_pool_module },
+            },
         }),
     });
     check_step.dependOn(&check.step);
