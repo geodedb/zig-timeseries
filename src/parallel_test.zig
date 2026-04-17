@@ -106,3 +106,31 @@ test "parallelBatchDTW parallel path: 256 candidates match serial results" {
         try std.testing.expectApproxEqAbs(expected.distance, results[idx].ok.distance, 1e-9);
     }
 }
+
+test "parallelBatchLbKeogh: matches per-pair serial" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const query = [_]f64{ 1, 2, 3, 4, 5, 4, 3, 2, 1, 0 };
+    var cand_bufs: [8][10]f64 = undefined;
+    for (&cand_bufs, 0..) |*b, k| {
+        for (b, 0..) |*v, i| v.* = @as(f64, @floatFromInt(i)) + @as(f64, @floatFromInt(k)) * 0.25;
+    }
+    var candidates: [8][]const f64 = undefined;
+    for (&cand_bufs, 0..) |*b, i| candidates[i] = b[0..];
+
+    var out: [8]f64 = undefined;
+    try parallel.parallelBatchLbKeogh(allocator, &pool, &query, candidates[0..], &out, 3, .{ .chunk_size = 2 });
+
+    for (candidates, 0..) |c, idx| {
+        const expected = ts.dtw.lbKeogh(&query, c, 3);
+        try std.testing.expectApproxEqAbs(expected, out[idx], 1e-12);
+    }
+}

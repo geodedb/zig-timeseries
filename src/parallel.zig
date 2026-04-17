@@ -238,14 +238,68 @@ pub fn parallelBatchLbKeogh(
     band: usize,
     batch_options: BatchOptions,
 ) !void {
-    _ = allocator;
-    _ = pool;
-    _ = query;
-    _ = candidates;
-    _ = out_distances;
-    _ = band;
-    _ = batch_options;
-    @panic("parallelBatchLbKeogh: not implemented");
+    std.debug.assert(out_distances.len == candidates.len);
+    if (candidates.len == 0) return;
+
+    if (pool == null or candidates.len == 1) {
+        for (candidates, 0..) |c, idx| out_distances[idx] = dtw_mod.lbKeogh(query, c, band);
+        return;
+    }
+
+    const chunk_size = if (batch_options.chunk_size == 0) default_chunk_size else batch_options.chunk_size;
+    const p = pool.?;
+    const n_chunks = (candidates.len + chunk_size - 1) / chunk_size;
+
+    const ctxs = try allocator.alloc(LbKeoghChunkCtx, n_chunks);
+    defer allocator.free(ctxs);
+
+    var wg = p.waitGroup();
+
+    var i: usize = 0;
+    var ci: usize = 0;
+    while (i < candidates.len) : (ci += 1) {
+        const end = @min(i + chunk_size, candidates.len);
+        ctxs[ci] = .{
+            .query = query,
+            .candidates = candidates[i..end],
+            .out_slice = out_distances[i..end],
+            .band = band,
+            .wg = &wg,
+        };
+        i = end;
+    }
+    wg.add(@intCast(n_chunks));
+
+    for (ctxs, 0..) |*c, k| {
+        _ = p.submit(lbKeoghChunkTask, c, .{ .lane = batch_options.lane }) catch {
+            for (ctxs[k..]) |*rest| {
+                lbKeoghChunkInline(rest);
+                rest.wg.done();
+            }
+            break;
+        };
+    }
+    wg.wait();
+}
+
+const LbKeoghChunkCtx = struct {
+    query: []const f64,
+    candidates: []const []const f64,
+    out_slice: []f64,
+    band: usize,
+    wg: *tp.WaitGroup,
+};
+
+fn lbKeoghChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
+    const c: *LbKeoghChunkCtx = @ptrCast(@alignCast(ctx_));
+    lbKeoghChunkInline(c);
+    c.wg.done();
+}
+
+fn lbKeoghChunkInline(c: *LbKeoghChunkCtx) void {
+    for (c.candidates, 0..) |cand, idx| {
+        c.out_slice[idx] = dtw_mod.lbKeogh(c.query, cand, c.band);
+    }
 }
 
 /// Batch non-DTW distances. Covers sbd/lcss/edr/erp/twed. For
