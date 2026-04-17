@@ -17,6 +17,8 @@
 //! - `spectral` -- FFT magnitude, STFT, Spectral Residual, Haar DWT
 //! - `anomaly` -- CUSUM and EWMA anomaly/change-point detection
 //! - `types` -- Core data types (PathPoint, Alignment, InvariantSet)
+//! - `parallel` -- Batch parallel entry points backed by `thread-pool`
+//!   (Zig API only; not exposed via C ABI)
 //!
 //! ## License
 //!
