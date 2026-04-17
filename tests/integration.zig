@@ -101,13 +101,13 @@ test "integration: chunk storage write -> queryRange round-trip" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_integ_rt_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try lib.ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
 
     // Write 50 points with known values.
-    var points: std.ArrayList(lib.Point) = .{};
+    var points: std.ArrayList(lib.Point) = .empty;
     defer points.deinit(ally);
 
     var i: i64 = 0;
@@ -137,7 +137,7 @@ test "integration: chunk storage write -> queryRange -> retention" {
     const pid = std.os.linux.getpid();
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_integ_ret_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try lib.ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
     defer storage.deinit();
@@ -262,4 +262,60 @@ test "integration: full pipeline insert -> preprocess -> extractFeatures" {
     var hist_sum: f64 = 0;
     for (12..22) |j| hist_sum += feats[j];
     try std.testing.expectApproxEqAbs(hist_sum, 1.0, 0.05);
+}
+
+test "integration: parallel batch DTW matches serial across variants" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const ts = @import("timeseries");
+    const tp = @import("thread_pool");
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 4 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const query = [_]f64{ 1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1 };
+    var cand_bufs: [16][11]f64 = undefined;
+    for (&cand_bufs, 0..) |*b, k| {
+        for (b, 0..) |*v, i| {
+            v.* = @as(f64, @floatFromInt(i)) + @as(f64, @floatFromInt(k)) * 0.1;
+        }
+    }
+    var candidates: [16][]const f64 = undefined;
+    for (&cand_bufs, 0..) |*b, i| candidates[i] = b[0..];
+
+    // Run constrained + openEnd in parallel; compare to per-pair serial.
+    const variants = [_]ts.parallel.DtwVariant{ .constrained, .open_end };
+    for (variants) |v| {
+        var results: [16]ts.parallel.BatchResult(ts.DtwResult) = undefined;
+        const ok = try ts.parallel.parallelBatchDTW(
+            allocator,
+            &pool,
+            &query,
+            candidates[0..],
+            &results,
+            .{ .variant = v, .band = 3 },
+            .{ .chunk_size = 4 },
+        );
+        defer for (&results) |*r| switch (r.*) {
+            .ok => |*dr| dr.deinit(allocator),
+            .err => {},
+        };
+        try testing.expectEqual(@as(usize, 16), ok);
+
+        for (candidates, 0..) |c, idx| {
+            var expected = switch (v) {
+                .constrained => try ts.dtw.constrainedDTW(allocator, &query, c, 3),
+                .open_end => try ts.dtw.openEndDTW(allocator, &query, c, 3),
+                else => unreachable,
+            };
+            defer expected.deinit(allocator);
+            try testing.expectApproxEqAbs(expected.distance, results[idx].ok.distance, 1e-9);
+        }
+    }
 }
