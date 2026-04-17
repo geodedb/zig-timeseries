@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const ts = @import("timeseries");
+const tp = @import("thread_pool");
 
 const allocator = std.heap.page_allocator;
 
@@ -15,11 +16,20 @@ const allocator = std.heap.page_allocator;
 // Timing helper
 // ---------------------------------------------------------------------------
 
-/// Write a formatted string to stdout using direct syscall.
+/// Monotonic nanosecond timestamp. Replaces std.time.Timer (removed in 0.16).
+fn monoNs() u64 {
+    var tspec: std.posix.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &tspec);
+    return @as(u64, @intCast(tspec.sec)) * std.time.ns_per_s +
+        @as(u64, @intCast(tspec.nsec));
+}
+
+/// Write a formatted string to stdout using a direct Linux syscall.
+/// std.posix.write was removed in Zig 0.16; use std.os.linux.write instead.
 fn writeStdout(comptime fmt: []const u8, args: anytype) void {
     var buf: [1024]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
-    _ = std.posix.write(std.posix.STDOUT_FILENO, msg) catch return;
+    _ = std.os.linux.write(std.posix.STDOUT_FILENO, msg.ptr, msg.len);
 }
 
 /// Run a benchmark function `iterations` times, reporting min/mean/max ns/op.
@@ -28,8 +38,6 @@ fn runBench(
     comptime benchFn: fn () void,
     iterations: usize,
 ) void {
-    var timer = std.time.Timer.start() catch return;
-
     // Warmup: 10% of iterations (minimum 1).
     const warmup = @max(1, iterations / 10);
     for (0..warmup) |_| {
@@ -41,9 +49,9 @@ fn runBench(
     var total_ns: u64 = 0;
 
     for (0..iterations) |_| {
-        timer.reset();
+        const t0 = monoNs();
         benchFn();
-        const elapsed = timer.read();
+        const elapsed = monoNs() - t0;
         if (elapsed < min_ns) min_ns = elapsed;
         if (elapsed > max_ns) max_ns = elapsed;
         total_ns += elapsed;
@@ -149,24 +157,9 @@ fn makeDTWBench(comptime n: usize) type {
 
         fn run() void {
             init();
-            var dist: f64 = undefined;
-            var pi: [n * 2]i32 = undefined;
-            var pj: [n * 2]i32 = undefined;
-            var plen: i32 = undefined;
-            const rc = ts.dtw.constrainedDTW(
-                allocator,
-                a.ptr,
-                @intCast(n),
-                b.ptr,
-                @intCast(n),
-                @intCast(n / 5),
-                &dist,
-                &pi,
-                &pj,
-                &plen,
-            );
-            doNotOptimize(rc);
-            doNotOptimize(dist);
+            const result = ts.dtw.constrainedDTW(allocator, a, b, n / 5) catch return;
+            defer result.deinit(allocator);
+            doNotOptimize(result.distance);
         }
     };
 }
@@ -190,11 +183,8 @@ const CrossCorr = struct {
 
     fn run() void {
         init();
-        var lag: i32 = undefined;
-        var corr: f64 = undefined;
-        const rc = ts.distances.crossCorrelate(a.ptr, 500, b.ptr, 500, &lag, &corr);
-        doNotOptimize(rc);
-        doNotOptimize(corr);
+        const result = ts.distances.crossCorrelate(a, b) catch return;
+        doNotOptimize(result.correlation);
     }
 };
 
@@ -211,11 +201,9 @@ const PELTBench = struct {
 
     fn run() void {
         init();
-        var cps: [500]i32 = undefined;
-        var cps_len: i32 = undefined;
-        const rc = ts.pelt.pelt(allocator, data.ptr, 500, 5.0, 2, &cps, &cps_len);
-        doNotOptimize(rc);
-        doNotOptimize(cps_len);
+        const cps = ts.pelt.pelt(allocator, data, 5.0, 2) catch return;
+        defer allocator.free(cps);
+        doNotOptimize(@as(f64, @floatFromInt(cps.len)));
     }
 };
 
@@ -232,9 +220,7 @@ const FeatureBench = struct {
 
     fn run() void {
         init();
-        var feats: [22]f64 = undefined;
-        const rc = ts.features.extractFeatures(allocator, data.ptr, 500, &feats);
-        doNotOptimize(rc);
+        const feats = ts.features.extractFeatures(allocator, data) catch return;
         doNotOptimize(feats[0]);
     }
 };
@@ -296,18 +282,113 @@ const ERPBench = struct {
 
     fn run() void {
         init();
-        var dist: f64 = undefined;
-        const rc = ts.distances.erp(allocator, a.ptr, 500, b.ptr, 500, 0.0, &dist);
-        doNotOptimize(rc);
+        const dist = ts.distances.erp(allocator, a, b, 0.0) catch return;
         doNotOptimize(dist);
     }
 };
 
 // ---------------------------------------------------------------------------
+// Parallel batch benchmarks (introduced 2026-04-16)
+// ---------------------------------------------------------------------------
+
+fn benchBatchDTWSerial(N: usize, len: usize, query: []const f64, cands: []const []const f64) !u64 {
+    const results = try allocator.alloc(ts.parallel.BatchResult(ts.DtwResult), N);
+    defer {
+        for (results) |*r| switch (r.*) {
+            .ok => |*dr| dr.deinit(allocator),
+            .err => {},
+        };
+        allocator.free(results);
+    }
+    const t0 = monoNs();
+    _ = try ts.parallel.parallelBatchDTW(
+        allocator,
+        null,
+        query,
+        cands,
+        results,
+        .{ .variant = .constrained, .band = @intCast(len / 4) },
+        .{},
+    );
+    return monoNs() - t0;
+}
+
+fn benchBatchDTWParallel(
+    N: usize,
+    len: usize,
+    query: []const f64,
+    cands: []const []const f64,
+    pool: *tp.ThreadPool,
+    chunk_size: usize,
+) !u64 {
+    const results = try allocator.alloc(ts.parallel.BatchResult(ts.DtwResult), N);
+    defer {
+        for (results) |*r| switch (r.*) {
+            .ok => |*dr| dr.deinit(allocator),
+            .err => {},
+        };
+        allocator.free(results);
+    }
+    const t0 = monoNs();
+    _ = try ts.parallel.parallelBatchDTW(
+        allocator,
+        pool,
+        query,
+        cands,
+        results,
+        .{ .variant = .constrained, .band = @intCast(len / 4) },
+        .{ .chunk_size = chunk_size },
+    );
+    return monoNs() - t0;
+}
+
+fn runParallelBenchSuite() !void {
+    writeStdout("\n== Parallel DTW batch: N=500 series, len=128 ==\n", .{});
+    const N: usize = 500;
+    const len: usize = 128;
+
+    const query = generateSine(len);
+    defer allocator.free(query);
+
+    const cand_bufs = try allocator.alloc([]f64, N);
+    defer {
+        for (cand_bufs) |b| allocator.free(b);
+        allocator.free(cand_bufs);
+    }
+    const cands = try allocator.alloc([]const f64, N);
+    defer allocator.free(cands);
+    for (0..N) |k| {
+        cand_bufs[k] = try allocator.alloc(f64, len);
+        for (cand_bufs[k], 0..) |*v, i|
+            v.* = @sin(@as(f64, @floatFromInt(i)) * 0.1 + @as(f64, @floatFromInt(k)) * 0.01);
+        cands[k] = cand_bufs[k];
+    }
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 8 });
+    defer {
+        pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    _ = try benchBatchDTWSerial(N, len, query, cands); // warmup
+    const serial_ns = try benchBatchDTWSerial(N, len, query, cands);
+    writeStdout("  serial:              {d:>10} ns  ({d:.2} series/ms)\n", .{
+        serial_ns, @as(f64, @floatFromInt(N)) / (@as(f64, @floatFromInt(serial_ns)) / 1e6),
+    });
+
+    for ([_]usize{ 4, 8, 16, 32, 64 }) |cs| {
+        const ns = try benchBatchDTWParallel(N, len, query, cands, &pool, cs);
+        writeStdout("  parallel chunk={d:>3}:   {d:>10} ns  ({d:.2} series/ms)\n", .{
+            cs, ns, @as(f64, @floatFromInt(N)) / (@as(f64, @floatFromInt(ns)) / 1e6),
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-pub fn main() void {
+pub fn main() !void {
     writeStdout("\n=== timeseries benchmarks ===\n\n", .{});
 
     runBench("BenchmarkDTW100", DTW100.run, 500);
@@ -319,6 +400,8 @@ pub fn main() void {
     runBench("BenchmarkInvariantCompute", InvariantBench.run, 1000);
     runBench("BenchmarkZNormalize", ZNormBench.run, 1000);
     runBench("BenchmarkERP", ERPBench.run, 100);
+
+    try runParallelBenchSuite();
 
     writeStdout("\n=== done ===\n\n", .{});
 }
