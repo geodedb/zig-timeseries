@@ -119,14 +119,112 @@ pub fn parallelBatchDTW(
     options: DtwOptions,
     batch_options: BatchOptions,
 ) !usize {
-    _ = allocator;
-    _ = pool;
-    _ = query;
-    _ = candidates;
-    _ = out_results;
-    _ = options;
-    _ = batch_options;
-    @panic("parallelBatchDTW: not implemented");
+    std.debug.assert(out_results.len == candidates.len);
+    if (candidates.len == 0) return 0;
+
+    if (pool == null or candidates.len == 1) {
+        var ok_count: usize = 0;
+        for (candidates, 0..) |c, idx| {
+            out_results[idx] = runDtwOne(allocator, query, c, options);
+            if (out_results[idx] == .ok) ok_count += 1;
+        }
+        return ok_count;
+    }
+
+    const chunk_size = if (batch_options.chunk_size == 0) default_chunk_size else batch_options.chunk_size;
+    const p = pool.?;
+    const n_chunks = (candidates.len + chunk_size - 1) / chunk_size;
+
+    const ctxs = try allocator.alloc(DtwChunkCtx, n_chunks);
+    defer allocator.free(ctxs);
+
+    var wg = p.waitGroup();
+
+    var i: usize = 0;
+    var ci: usize = 0;
+    while (i < candidates.len) : (ci += 1) {
+        const end = @min(i + chunk_size, candidates.len);
+        ctxs[ci] = .{
+            .allocator = allocator,
+            .query = query,
+            .candidates = candidates[i..end],
+            .out_slice = out_results[i..end],
+            .options = options,
+            .wg = &wg,
+        };
+        i = end;
+    }
+    wg.add(@intCast(n_chunks));
+
+    for (ctxs, 0..) |*c, k| {
+        _ = p.submit(dtwChunkTask, c, .{ .lane = batch_options.lane }) catch {
+            for (ctxs[k..]) |*rest| {
+                dtwChunkInline(rest);
+                rest.wg.done();
+            }
+            break;
+        };
+    }
+    wg.wait();
+
+    var ok_count: usize = 0;
+    for (out_results) |r| if (r == .ok) {
+        ok_count += 1;
+    };
+    return ok_count;
+}
+
+fn runDtwOne(
+    allocator: std.mem.Allocator,
+    query: []const f64,
+    candidate: []const f64,
+    options: DtwOptions,
+) BatchResult(DtwResult) {
+    const result = switch (options.variant) {
+        .constrained => dtw_mod.constrainedDTW(allocator, query, candidate, options.band),
+        .derivative => dtw_mod.derivativeDTW(allocator, query, candidate, options.band),
+        .open_end => dtw_mod.openEndDTW(allocator, query, candidate, options.band),
+        .shape => dtw_mod.shapeDTW(allocator, query, candidate, options.band, options.descriptor_len),
+        .soft => blk: {
+            const dist = dtw_mod.softDTW(allocator, query, candidate, options.gamma) catch |e| {
+                break :blk @as(anyerror!DtwResult, e);
+            };
+            break :blk @as(anyerror!DtwResult, DtwResult{ .distance = dist, .path = &.{} });
+        },
+    } catch |e| return .{ .err = mapTsError(e) };
+
+    return .{ .ok = result };
+}
+
+fn mapTsError(e: anyerror) TsError {
+    return switch (e) {
+        error.InvalidInput => TsError.InvalidInput,
+        error.AllocationTooLarge => TsError.AllocationTooLarge,
+        error.SeriesTooLong => TsError.SeriesTooLong,
+        error.OutOfMemory => TsError.OutOfMemory,
+        else => TsError.InvalidInput, // defensive catch-all for unexpected errors
+    };
+}
+
+const DtwChunkCtx = struct {
+    allocator: std.mem.Allocator,
+    query: []const f64,
+    candidates: []const []const f64,
+    out_slice: []BatchResult(DtwResult),
+    options: DtwOptions,
+    wg: *tp.WaitGroup,
+};
+
+fn dtwChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
+    const c: *DtwChunkCtx = @ptrCast(@alignCast(ctx_));
+    dtwChunkInline(c);
+    c.wg.done();
+}
+
+fn dtwChunkInline(c: *DtwChunkCtx) void {
+    for (c.candidates, 0..) |cand, idx| {
+        c.out_slice[idx] = runDtwOne(c.allocator, c.query, cand, c.options);
+    }
 }
 
 /// Batch LB_Keogh prefilter. Returns distances directly (no allocation
