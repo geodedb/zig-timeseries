@@ -74,6 +74,47 @@ make ci
 
 See the [docs](docs/) directory for detailed documentation.
 
+## Observability
+
+timeseries ships an opt-in OpenTelemetry seam. Build with
+`-Dwith_otel=true` to compile in instrumentation; the default
+(`-Dwith_otel=false`) leaves every span site as a comptime no-op so
+the optimizer eliminates the entry/exit calls and the `otel`
+dependency is never fetched.
+
+Each public timeseries operation emits exactly one span per call,
+named `ts.{operation}` (e.g. `ts.insert`, `ts.query`,
+`ts.downsample`, `ts.retention`, `ts.compact`) with the
+OpenTelemetry `db.*` semantic-convention attributes plus a
+ts-specific metric tag:
+
+- `db.system = "timeseries"`
+- `db.operation = <method>` (e.g. `insert`, `query`, `downsample`)
+- `ts.metric = <metric_name>` (the metric NAME, e.g. `"cpu.usage"`;
+  metric VALUES are intentionally never recorded)
+- `ts.points = <count>` (batch size for inserts; row count for
+  queries/downsamples; total flushed for compact)
+
+```bash
+zig build test                  # default: -Dwith_otel=false (no-op)
+zig build test -Dwith_otel=true # otel compiled in, spans emitted
+```
+
+When enabled, the consumer's process bootstrap calls
+`timeseries.observability_init.Otel.init(allocator, "service-name")`
+and parks the returned value at a stable address (a `var` in `main`
+or a heap allocation), then calls `installGlobals(&that_value)` so
+the seam can publish its tracer pointer. Span emission is non-fatal:
+every emit is `catch {}`-discarded so a failed exporter cannot
+propagate into timeseries operations.
+
+The C ABI surface (`ai_ts` shared/static library) is unaffected by
+`-Dwith_otel` — Go (CGO) and Python (ctypes) consumers don't need to
+opt in to the seam.
+
+For the full integration recipe and template files, see
+`otel/docs/integration/RECIPE.md` in the otel repo.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
