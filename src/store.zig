@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const chunk_storage = @import("chunk_storage.zig");
+const observability = @import("observability");
 
 /// Time-series data point.
 pub const Point = struct {
@@ -182,8 +183,15 @@ pub const Store = struct {
     /// When persistence is enabled, flushes to ChunkStorage when the
     /// unflushed count reaches the chunk_config.max_points_per_chunk threshold.
     pub fn insertMany(self: *Store, key: SeriesKey, pts: []const Point) !void {
+        var __obs_span = observability.startTimeseriesSpan("insert", key.metric);
+        defer __obs_span.end(null);
+        errdefer observability.endTimeseriesSpan(__obs_span, false, @intCast(pts.len));
+
         const s = try self.getOrCreateSeries(key);
-        if (pts.len == 0) return;
+        if (pts.len == 0) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return;
+        }
 
         const cmpFn = struct {
             fn less(_: void, a: Point, b: Point) bool {
@@ -239,6 +247,8 @@ pub const Store = struct {
                 gop.value_ptr.* = 0;
             }
         }
+
+        observability.endTimeseriesSpan(__obs_span, true, @intCast(pts.len));
     }
 
     /// Get the last point in a series.
@@ -280,10 +290,24 @@ pub const Store = struct {
         aggregation: Aggregation,
         allocator: std.mem.Allocator,
     ) ![]const SampleRow {
-        if (interval_ms <= 0 or end_ts <= start_ts) return &.{};
+        // sampleBy is the timeseries query/aggregation entrypoint —
+        // span name `"ts.query"`. We span the OUTER call and never the
+        // per-bucket inner loop (per the rollout constraint:
+        // "Don't span individual data points inside batch/query").
+        var __obs_span = observability.startTimeseriesSpan("query", key.metric);
+        defer __obs_span.end(null);
+        errdefer observability.endTimeseriesSpan(__obs_span, false, 0);
+
+        if (interval_ms <= 0 or end_ts <= start_ts) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
 
         const hk = self.hashKey(key);
-        const sp = self.by_key.get(hk) orelse return &.{};
+        const sp = self.by_key.get(hk) orelse {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        };
         const n_buckets: usize = @intCast(@divTrunc((end_ts - start_ts) + interval_ms - 1, interval_ms));
 
         var buckets = try allocator.alloc(struct {
@@ -349,6 +373,7 @@ pub const Store = struct {
             out[i] = .{ .ts = b.start_ts, .value = value };
         }
 
+        observability.endTimeseriesSpan(__obs_span, true, @intCast(out.len));
         return out;
     }
 
@@ -361,9 +386,21 @@ pub const Store = struct {
         t1: i64,
         allocator: std.mem.Allocator,
     ) ![]const BucketAvgRow {
-        if (bucket_seconds <= 0 or t1 <= t0) return &.{};
+        // Downsample-shaped operation — span name `"ts.downsample"`.
+        // We span the OUTER call only.
+        var __obs_span = observability.startTimeseriesSpan("downsample", key.metric);
+        defer __obs_span.end(null);
+        errdefer observability.endTimeseriesSpan(__obs_span, false, 0);
+
+        if (bucket_seconds <= 0 or t1 <= t0) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
         const hk = self.hashKey(key);
-        const sp = self.by_key.get(hk) orelse return &.{};
+        const sp = self.by_key.get(hk) orelse {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        };
         const n_buckets: usize = @intCast(@divTrunc((t1 - t0) + bucket_seconds - 1, bucket_seconds));
         var buckets = try allocator.alloc(Bucket, n_buckets);
         defer allocator.free(buckets);
@@ -392,6 +429,7 @@ pub const Store = struct {
                 out[i] = .{ .ts = b.start_ts, .avg = v };
             }
         }
+        observability.endTimeseriesSpan(__obs_span, true, @intCast(out.len));
         return out;
     }
 
@@ -401,10 +439,25 @@ pub const Store = struct {
 
     /// Flush all unflushed in-memory points to ChunkStorage.
     /// Called from deinit and can be called explicitly.
+    ///
+    /// `sync` is the timeseries compact/flush operation — it forces
+    /// every unflushed in-memory point out to the on-disk chunk store.
+    /// We span this as `"ts.compact"` (per the rollout spec). The
+    /// `ts.metric` attribute is "" because `sync` operates across all
+    /// series at once, not a single metric — there is no useful single
+    /// metric name to attach.
     pub fn sync(self: *Store) !void {
-        const cs = self.chunk_store orelse return;
+        var __obs_span = observability.startTimeseriesSpan("compact", "");
+        defer __obs_span.end(null);
+        errdefer observability.endTimeseriesSpan(__obs_span, false, 0);
+
+        const cs = self.chunk_store orelse {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return;
+        };
 
         var ufit = self.unflushed.iterator();
+        var flushed_total: u64 = 0;
         while (ufit.next()) |entry| {
             const count = entry.value_ptr.*;
             if (count == 0) continue;
@@ -415,8 +468,11 @@ pub const Store = struct {
 
             const chunk_id = chunkSeriesId(hk);
             try cs.writePoints(chunk_id, series.points.items);
+            flushed_total += @intCast(series.points.items.len);
             entry.value_ptr.* = 0;
         }
+
+        observability.endTimeseriesSpan(__obs_span, true, flushed_total);
     }
 
     /// Load all persisted data from ChunkStorage into memory.
@@ -456,9 +512,20 @@ pub const Store = struct {
     }
 
     /// Run retention policy on the underlying ChunkStorage.
+    ///
+    /// Span name `"ts.retention"`. Like `sync`, retention is global —
+    /// no single metric — so `ts.metric` is "".
     pub fn runRetention(self: *Store, current_time: i64) !void {
-        const cs = self.chunk_store orelse return;
+        var __obs_span = observability.startTimeseriesSpan("retention", "");
+        defer __obs_span.end(null);
+        errdefer observability.endTimeseriesSpan(__obs_span, false, 0);
+
+        const cs = self.chunk_store orelse {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return;
+        };
         try cs.runRetention(current_time);
+        observability.endTimeseriesSpan(__obs_span, true, 0);
     }
 
     /// Persist series key metadata (device_id, metric) to a file so that
