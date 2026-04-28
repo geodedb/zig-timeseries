@@ -76,6 +76,25 @@ pub const baselineCorrectAlloc = preprocess.baselineCorrectAlloc;
 pub const abi = @import("abi.zig");
 
 // ============================================================================
+// Observability (otel)
+// ============================================================================
+//
+// otel observability seam. Surfaces `startTimeseriesSpan` /
+// `endTimeseriesSpan` plus the `enabled` flag. When
+// `-Dwith_otel=false` (the default) every helper here compiles to a
+// comptime-known no-op and the `otel` dependency is never fetched. The
+// public API is reachable as `timeseries.observability`.
+pub const observability = @import("observability");
+
+// Bootstrap helper. Only reachable when `-Dwith_otel=true`; otherwise
+// `observability_init` is a stub `struct {}` so callers that opt-out
+// don't accidentally take a dep on otel SDK init types.
+pub const observability_init = if (observability.enabled)
+    @import("observability_init")
+else
+    struct {};
+
+// ============================================================================
 // Unit Tests
 // ============================================================================
 
