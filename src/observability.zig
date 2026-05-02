@@ -23,11 +23,18 @@
 //! sensitive sample data through the trace pipeline.
 
 const std = @import("std");
-const build_options = @import("build_options");
 
-pub const enabled: bool = build_options.with_otel;
+// 2026-05-02: hardcoded `enabled = false` and removed the `build_options`
+// import + the conditional `otel` import. The previous `@import("build_options")`
+// + `if (enabled) @import("otel") else struct {}` pattern surfaced a Zig 0.16
+// module-dedup quirk when timeseries was reached through multiple paths in
+// a downstream build graph (geode), producing a `'build_options' vs
+// 'build_options0'` diamond at this file. The seam is preserved as a
+// permanent no-op for forward-compat; restore the conditional once the
+// upstream Zig dedup issue is resolved.
+pub const enabled: bool = false;
 
-const otel = if (enabled) @import("otel") else struct {};
+const otel = struct {};
 
 /// Opaque handle for an in-flight operation. When disabled, this is a
 /// zero-sized struct the optimizer drops entirely. The no-op fallback's
