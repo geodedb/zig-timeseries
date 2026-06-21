@@ -702,10 +702,14 @@ fn chunkSeriesId(hk: u128) u64 {
 
 /// Static version of hashKey that does not require a Store instance.
 fn hashKeyStatic(k: SeriesKey) u128 {
+    // fips-exempt: non-security — series-key hashmap hashing (device_id + metric)
+    // into a 128-bit index key via two Wyhash seeds; distribution/lookup only,
+    // not a secret.
     var h1 = std.hash.Wyhash.init(0);
     h1.update(std.mem.asBytes(&k.device_id));
     h1.update(k.metric);
     const x1 = h1.final();
+    // fips-exempt: non-security — second half of the 128-bit series-key hash (see above).
     var h2 = std.hash.Wyhash.init(0x517cc1b727220a95);
     h2.update(std.mem.asBytes(&k.device_id));
     h2.update(k.metric);
@@ -977,4 +981,9 @@ test "store: init backward compat — in-memory only" {
     const l = st.last(key).?;
     try std.testing.expectEqual(@as(i64, 600), l.ts);
     try std.testing.expect(st.chunk_store == null);
+}
+
+test "fips-exempt annotation present on series-key Wyhash site" {
+    const src = @embedFile("store.zig");
+    try std.testing.expect(std.mem.indexOf(u8, src, "fips-exempt: non-security — series-key hashmap") != null);
 }
