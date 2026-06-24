@@ -1,0 +1,17 @@
+299:9:1:ZL009.var_should_be_const:variable 'prng' is never reassigned; consider using 'const'
+177:44:1:ZL010.magic_number:magic number 42; consider using a named constant
+180:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+200:44:1:ZL010.magic_number:magic number 123; consider using a named constant
+203:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+219:44:1:ZL010.magic_number:magic number 456; consider using a named constant
+222:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+235:44:1:ZL010.magic_number:magic number 789; consider using a named constant
+238:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+258:44:1:ZL010.magic_number:magic number 1001; consider using a named constant
+261:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+280:44:1:ZL010.magic_number:magic number 2002; consider using a named constant
+283:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+299:44:1:ZL010.magic_number:magic number 3003; consider using a named constant
+302:13:1:ZL010.magic_number:magic number 200; consider using a named constant
+52:29:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+53:29:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

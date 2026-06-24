@@ -1,0 +1,9 @@
+42:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+49:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+99:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+103:9:1:ZL009.var_should_be_const:variable 'var_sum' is never reassigned; consider using 'const'
+121:9:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+69:25:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+71:33:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+136:25:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+138:33:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

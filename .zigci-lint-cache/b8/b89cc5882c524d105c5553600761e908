@@ -1,0 +1,34 @@
+35:15:1:ZL200.fn_camelcase:function 'ts_version' should use camelCase
+69:15:1:ZL200.fn_camelcase:function 'ts_dtw' should use camelCase
+99:15:1:ZL200.fn_camelcase:function 'ts_dtw_derivative' should use camelCase
+128:15:1:ZL200.fn_camelcase:function 'ts_dtw_open_end' should use camelCase
+157:15:1:ZL200.fn_camelcase:function 'ts_dtw_shape' should use camelCase
+189:15:1:ZL200.fn_camelcase:function 'ts_soft_dtw' should use camelCase
+209:15:1:ZL200.fn_camelcase:function 'ts_lb_keogh' should use camelCase
+234:15:1:ZL200.fn_camelcase:function 'ts_cross_correlate' should use camelCase
+257:15:1:ZL200.fn_camelcase:function 'ts_sbd' should use camelCase
+276:15:1:ZL200.fn_camelcase:function 'ts_pelt' should use camelCase
+309:15:1:ZL200.fn_camelcase:function 'ts_lcss' should use camelCase
+331:15:1:ZL200.fn_camelcase:function 'ts_edr' should use camelCase
+351:15:1:ZL200.fn_camelcase:function 'ts_erp' should use camelCase
+371:15:1:ZL200.fn_camelcase:function 'ts_twed' should use camelCase
+397:15:1:ZL200.fn_camelcase:function 'ts_matrix_profile' should use camelCase
+432:15:1:ZL200.fn_camelcase:function 'ts_mp_dist' should use camelCase
+453:15:1:ZL200.fn_camelcase:function 'ts_extract_features' should use camelCase
+471:15:1:ZL200.fn_camelcase:function 'ts_cosine_similarity' should use camelCase
+392:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+44:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+69:12:2:ZL302.max_params:function has too many parameters (11 > 6)
+99:12:2:ZL302.max_params:function has too many parameters (11 > 6)
+128:12:2:ZL302.max_params:function has too many parameters (11 > 6)
+157:12:2:ZL302.max_params:function has too many parameters (12 > 6)
+189:12:2:ZL302.max_params:function has too many parameters (7 > 6)
+209:12:2:ZL302.max_params:function has too many parameters (7 > 6)
+234:12:2:ZL302.max_params:function has too many parameters (7 > 6)
+276:12:2:ZL302.max_params:function has too many parameters (8 > 6)
+309:12:2:ZL302.max_params:function has too many parameters (8 > 6)
+331:12:2:ZL302.max_params:function has too many parameters (7 > 6)
+351:12:2:ZL302.max_params:function has too many parameters (7 > 6)
+371:12:2:ZL302.max_params:function has too many parameters (10 > 6)
+397:12:2:ZL302.max_params:function has too many parameters (8 > 6)
+432:12:2:ZL302.max_params:function has too many parameters (7 > 6)

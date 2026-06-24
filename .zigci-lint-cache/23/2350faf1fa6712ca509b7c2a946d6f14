@@ -1,0 +1,4 @@
+15:9:1:ZL009.var_should_be_const:variable 'result' is never reassigned; consider using 'const'
+34:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+46:9:1:ZL009.var_should_be_const:variable 'var_sum' is never reassigned; consider using 'const'
+22:30:1:ZL010.magic_number:magic number 10; consider using a named constant

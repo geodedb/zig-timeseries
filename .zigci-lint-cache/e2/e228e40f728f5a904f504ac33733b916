@@ -1,0 +1,23 @@
+25:7:1:ZL203.const_snakecase:constant 'MAX_ALLOC_F64' should use snake_case (or PascalCase for types)
+28:7:1:ZL203.const_snakecase:constant 'MAX_ALLOC_I32' should use snake_case (or PascalCase for types)
+31:7:1:ZL203.const_snakecase:constant 'FFT_THRESHOLD' should use snake_case (or PascalCase for types)
+14:101:2:ZL300.max_line_length:line exceeds 100 characters (106)
+16:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+423:101:2:ZL300.max_line_length:line exceeds 100 characters (109)
+97:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+137:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+393:5:2:ZL302.max_params:function has too many parameters (8 > 6)
+37:9:1:ZL009.var_should_be_const:variable 'j' is never reassigned; consider using 'const'
+39:13:1:ZL009.var_should_be_const:variable 'bit' is never reassigned; consider using 'const'
+52:9:1:ZL009.var_should_be_const:variable 'len' is never reassigned; consider using 'const'
+58:13:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+91:9:1:ZL009.var_should_be_const:variable 'p' is never reassigned; consider using 'const'
+113:13:1:ZL009.var_should_be_const:variable 'cc' is never reassigned; consider using 'const'
+117:13:1:ZL009.var_should_be_const:variable 'ia' is never reassigned; consider using 'const'
+118:13:1:ZL009.var_should_be_const:variable 'ib' is never reassigned; consider using 'const'
+219:9:1:ZL009.var_should_be_const:variable 'mean_a' is never reassigned; consider using 'const'
+223:9:1:ZL009.var_should_be_const:variable 'mean_b' is never reassigned; consider using 'const'
+375:9:1:ZL009.var_should_be_const:variable 'col0' is never reassigned; consider using 'const'
+421:17:1:ZL009.var_should_be_const:variable 'cost_match' is never reassigned; consider using 'const'
+426:17:1:ZL009.var_should_be_const:variable 'cost_del_a' is never reassigned; consider using 'const'
+431:17:1:ZL009.var_should_be_const:variable 'cost_del_b' is never reassigned; consider using 'const'

@@ -1,0 +1,23 @@
+7:7:1:ZL203.const_snakecase:constant 'expectApprox' should use snake_case (or PascalCase for types)
+142:9:1:ZL009.var_should_be_const:variable 'hist_sum' is never reassigned; consider using 'const'
+10:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+10:37:1:ZL010.magic_number:magic number 4; consider using a named constant
+10:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+35:29:1:ZL010.magic_number:magic number 3; consider using a named constant
+55:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+55:37:1:ZL010.magic_number:magic number 4; consider using a named constant
+55:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+110:45:1:ZL010.magic_number:magic number 3; consider using a named constant
+111:45:1:ZL010.magic_number:magic number 4; consider using a named constant
+112:47:1:ZL010.magic_number:magic number 5; consider using a named constant
+113:48:1:ZL010.magic_number:magic number 6; consider using a named constant
+114:50:1:ZL010.magic_number:magic number 7; consider using a named constant
+116:47:1:ZL010.magic_number:magic number 9; consider using a named constant
+117:46:1:ZL010.magic_number:magic number 10; consider using a named constant
+118:47:1:ZL010.magic_number:magic number 11; consider using a named constant
+119:52:1:ZL010.magic_number:magic number 12; consider using a named constant
+120:50:1:ZL010.magic_number:magic number 22; consider using a named constant
+121:55:1:ZL010.magic_number:magic number 22; consider using a named constant
+125:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+125:37:1:ZL010.magic_number:magic number 4; consider using a named constant
+125:40:1:ZL010.magic_number:magic number 5; consider using a named constant

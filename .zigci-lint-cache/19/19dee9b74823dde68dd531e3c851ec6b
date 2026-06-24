@@ -1,0 +1,32 @@
+52:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+65:9:1:ZL009.var_should_be_const:variable 'var_sum' is never reassigned; consider using 'const'
+66:9:1:ZL009.var_should_be_const:variable 'm3' is never reassigned; consider using 'const'
+67:9:1:ZL009.var_should_be_const:variable 'm4' is never reassigned; consider using 'const'
+68:9:1:ZL009.var_should_be_const:variable 'slope_num' is never reassigned; consider using 'const'
+69:9:1:ZL009.var_should_be_const:variable 'slope_den' is never reassigned; consider using 'const'
+101:9:1:ZL009.var_should_be_const:variable 'hist' is never reassigned; consider using 'const'
+112:9:1:ZL009.var_should_be_const:variable 'feats' is never reassigned; consider using 'const'
+141:9:1:ZL009.var_should_be_const:variable 'dot_v' is never reassigned; consider using 'const'
+142:9:1:ZL009.var_should_be_const:variable 'norm_a_v' is never reassigned; consider using 'const'
+143:9:1:ZL009.var_should_be_const:variable 'norm_b_v' is never reassigned; consider using 'const'
+156:9:1:ZL009.var_should_be_const:variable 'dot' is never reassigned; consider using 'const'
+157:9:1:ZL009.var_should_be_const:variable 'norm_a_acc' is never reassigned; consider using 'const'
+158:9:1:ZL009.var_should_be_const:variable 'norm_b_acc' is never reassigned; consider using 'const'
+101:33:1:ZL010.magic_number:magic number 10; consider using a named constant
+109:13:1:ZL010.magic_number:magic number 10; consider using a named constant
+125:13:1:ZL010.magic_number:magic number 10; consider using a named constant
+18:5:1:ZL011.missing_doc_comment:public declaration 'length' is missing documentation
+19:5:1:ZL011.missing_doc_comment:public declaration 'mean' is missing documentation
+20:5:1:ZL011.missing_doc_comment:public declaration 'std_dev' is missing documentation
+21:5:1:ZL011.missing_doc_comment:public declaration 'min' is missing documentation
+22:5:1:ZL011.missing_doc_comment:public declaration 'max' is missing documentation
+23:5:1:ZL011.missing_doc_comment:public declaration 'range' is missing documentation
+24:5:1:ZL011.missing_doc_comment:public declaration 'median' is missing documentation
+25:5:1:ZL011.missing_doc_comment:public declaration 'skewness' is missing documentation
+26:5:1:ZL011.missing_doc_comment:public declaration 'kurtosis' is missing documentation
+27:5:1:ZL011.missing_doc_comment:public declaration 'first' is missing documentation
+28:5:1:ZL011.missing_doc_comment:public declaration 'last' is missing documentation
+29:5:1:ZL011.missing_doc_comment:public declaration 'slope' is missing documentation
+30:5:1:ZL011.missing_doc_comment:public declaration 'hist_start' is missing documentation
+31:5:1:ZL011.missing_doc_comment:public declaration 'hist_end' is missing documentation
+32:5:1:ZL011.missing_doc_comment:public declaration 'feature_count' is missing documentation

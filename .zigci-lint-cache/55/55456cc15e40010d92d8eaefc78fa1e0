@@ -1,0 +1,13 @@
+26:11:1:ZL203.const_snakecase:constant 'MAX_SERIES_LEN' should use snake_case (or PascalCase for types)
+29:7:1:ZL203.const_snakecase:constant 'STD_EPS' should use snake_case (or PascalCase for types)
+225:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+80:8:2:ZL302.max_params:function has too many parameters (7 > 6)
+253:5:2:ZL302.max_params:function has too many parameters (9 > 6)
+41:9:1:ZL009.var_should_be_const:variable 'mean_a' is never reassigned; consider using 'const'
+45:9:1:ZL009.var_should_be_const:variable 'var_a' is never reassigned; consider using 'const'
+52:9:1:ZL009.var_should_be_const:variable 'mean_b' is never reassigned; consider using 'const'
+56:9:1:ZL009.var_should_be_const:variable 'var_b' is never reassigned; consider using 'const'
+114:9:1:ZL009.var_should_be_const:variable 'sum_sq' is never reassigned; consider using 'const'
+130:13:1:ZL009.var_should_be_const:variable 'var_sum' is never reassigned; consider using 'const'
+141:9:1:ZL009.var_should_be_const:variable 'dp' is never reassigned; consider using 'const'
+267:13:1:ZL009.var_should_be_const:variable 'dp' is never reassigned; consider using 'const'

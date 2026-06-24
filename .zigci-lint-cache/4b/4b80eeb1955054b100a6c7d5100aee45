@@ -1,0 +1,14 @@
+125:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+22:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+23:14:1:ZL010.magic_number:magic number 40; consider using a named constant
+35:19:1:ZL010.magic_number:magic number 20; consider using a named constant
+36:20:1:ZL010.magic_number:magic number 20; consider using a named constant
+45:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+57:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+58:14:1:ZL010.magic_number:magic number 40; consider using a named constant
+82:13:1:ZL010.magic_number:magic number 30; consider using a named constant
+94:20:1:ZL010.magic_number:magic number 15; consider using a named constant
+94:34:1:ZL010.magic_number:magic number 20; consider using a named constant
+105:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+126:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+136:20:1:ZL010.magic_number:magic number 10; consider using a named constant

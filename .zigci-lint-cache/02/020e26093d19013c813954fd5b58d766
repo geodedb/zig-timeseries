@@ -1,0 +1,22 @@
+24:7:1:ZL203.const_snakecase:constant 'MAX_ALLOC_ELEMENTS' should use snake_case (or PascalCase for types)
+12:101:2:ZL300.max_line_length:line exceeds 100 characters (118)
+352:5:2:ZL301.max_function_lines:function exceeds 80 lines (118)
+412:82:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+41:9:1:ZL009.var_should_be_const:variable 'plen' is never reassigned; consider using 'const'
+304:17:1:ZL009.var_should_be_const:variable 'candidates' is never reassigned; consider using 'const'
+305:17:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+331:17:1:ZL009.var_should_be_const:variable 'sum_exp' is never reassigned; consider using 'const'
+365:9:1:ZL009.var_should_be_const:variable 'upper_deque_buf' is never reassigned; consider using 'const'
+366:9:1:ZL009.var_should_be_const:variable 'lower_deque_buf' is never reassigned; consider using 'const'
+369:9:1:ZL009.var_should_be_const:variable 'upper_env_buf' is never reassigned; consider using 'const'
+370:9:1:ZL009.var_should_be_const:variable 'lower_env_buf' is never reassigned; consider using 'const'
+374:13:1:ZL009.var_should_be_const:variable 'lb' is never reassigned; consider using 'const'
+403:13:1:ZL009.var_should_be_const:variable 'dq_front' is never reassigned; consider using 'const'
+404:13:1:ZL009.var_should_be_const:variable 'dq_back' is never reassigned; consider using 'const'
+405:13:1:ZL009.var_should_be_const:variable 'next_add' is never reassigned; consider using 'const'
+430:13:1:ZL009.var_should_be_const:variable 'dq' is never reassigned; consider using 'const'
+431:13:1:ZL009.var_should_be_const:variable 'dq_front' is never reassigned; consider using 'const'
+432:13:1:ZL009.var_should_be_const:variable 'dq_back' is never reassigned; consider using 'const'
+433:13:1:ZL009.var_should_be_const:variable 'next_add' is never reassigned; consider using 'const'
+457:9:1:ZL009.var_should_be_const:variable 'lb' is never reassigned; consider using 'const'
+72:31:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

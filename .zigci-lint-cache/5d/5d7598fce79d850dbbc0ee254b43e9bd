@@ -1,0 +1,13 @@
+76:23:2:ZL001.no_undefined:use of 'undefined' may hide uninitialized memory bugs
+77:22:2:ZL001.no_undefined:use of 'undefined' may hide uninitialized memory bugs
+95:48:3:ZL003.no_empty_catch:empty catch block suppresses errors
+96:47:3:ZL003.no_empty_catch:empty catch block suppresses errors
+97:48:3:ZL003.no_empty_catch:empty catch block suppresses errors
+60:13:1:ZL009.var_should_be_const:variable 'tp' is never reassigned; consider using 'const'
+63:13:1:ZL009.var_should_be_const:variable 'mp' is never reassigned; consider using 'const'
+66:13:1:ZL009.var_should_be_const:variable 'lp' is never reassigned; consider using 'const'
+95:41:1:ZL010.magic_number:magic number 2_000; consider using a named constant
+96:40:1:ZL010.magic_number:magic number 2_000; consider using a named constant
+97:41:1:ZL010.magic_number:magic number 2_000; consider using a named constant
+22:1:1:ZL011.missing_doc_comment:public declaration 'Otel' is missing documentation
+92:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation

@@ -1,0 +1,6 @@
+56:11:1:ZL201.type_pascalcase:type 'segmentCost' should use PascalCase
+56:11:1:ZL203.const_snakecase:constant 'segmentCost' should use snake_case (or PascalCase for types)
+11:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+112:13:1:ZL009.var_should_be_const:variable 'new_count' is never reassigned; consider using 'const'
+131:9:1:ZL009.var_should_be_const:variable 'result_len' is never reassigned; consider using 'const'
+140:33:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

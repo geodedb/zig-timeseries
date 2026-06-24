@@ -1,0 +1,27 @@
+7:7:1:ZL203.const_snakecase:constant 'expectApprox' should use snake_case (or PascalCase for types)
+55:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+10:36:1:ZL010.magic_number:magic number 3; consider using a named constant
+10:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+11:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+11:37:1:ZL010.magic_number:magic number 4; consider using a named constant
+11:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+31:27:1:ZL010.magic_number:magic number 42; consider using a named constant
+41:36:1:ZL010.magic_number:magic number 3; consider using a named constant
+41:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+42:28:1:ZL010.magic_number:magic number 5; consider using a named constant
+42:31:1:ZL010.magic_number:magic number 5; consider using a named constant
+42:34:1:ZL010.magic_number:magic number 5; consider using a named constant
+42:37:1:ZL010.magic_number:magic number 5; consider using a named constant
+42:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+51:36:1:ZL010.magic_number:magic number 3; consider using a named constant
+51:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+51:42:1:ZL010.magic_number:magic number 5; consider using a named constant
+51:45:1:ZL010.magic_number:magic number 6; consider using a named constant
+51:48:1:ZL010.magic_number:magic number 7; consider using a named constant
+51:54:1:ZL010.magic_number:magic number 9; consider using a named constant
+52:31:1:ZL010.magic_number:magic number 5; consider using a named constant
+52:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+52:37:1:ZL010.magic_number:magic number 7; consider using a named constant
+52:46:1:ZL010.magic_number:magic number 4; consider using a named constant
+52:49:1:ZL010.magic_number:magic number 6; consider using a named constant
+52:52:1:ZL010.magic_number:magic number 9; consider using a named constant

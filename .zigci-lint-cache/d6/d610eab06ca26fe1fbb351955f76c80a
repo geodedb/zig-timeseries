@@ -1,0 +1,9 @@
+14:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+67:9:1:ZL009.var_should_be_const:variable 'num_windows' is never reassigned; consider using 'const'
+69:13:1:ZL009.var_should_be_const:variable 'start' is never reassigned; consider using 'const'
+88:9:1:ZL009.var_should_be_const:variable 'start' is never reassigned; consider using 'const'
+144:13:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+145:13:1:ZL009.var_should_be_const:variable 'count' is never reassigned; consider using 'const'
+76:33:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+166:35:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+199:33:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

@@ -1,0 +1,43 @@
+21:37:2:ZL001.no_undefined:use of 'undefined' may hide uninitialized memory bugs
+369:54:3:ZL003.no_empty_catch:empty catch block suppresses errors
+316:1:2:ZL302.max_params:function has too many parameters (7 > 6)
+21:9:1:ZL009.var_should_be_const:variable 'tspec' is never reassigned; consider using 'const'
+30:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+49:9:1:ZL009.var_should_be_const:variable 'total_ns' is never reassigned; consider using 'const'
+118:5:1:ZL009.var_should_be_const:variable 'sink' is never reassigned; consider using 'const'
+367:9:1:ZL009.var_should_be_const:variable 'pool' is never reassigned; consider using 'const'
+179:30:1:ZL010.magic_number:magic number 500; consider using a named constant
+180:30:1:ZL010.magic_number:magic number 500; consider using a named constant
+198:33:1:ZL010.magic_number:magic number 500; consider using a named constant
+217:33:1:ZL010.magic_number:magic number 500; consider using a named constant
+236:40:1:ZL010.magic_number:magic number 500; consider using a named constant
+237:35:1:ZL010.magic_number:magic number 500; consider using a named constant
+256:37:1:ZL010.magic_number:magic number 500; consider using a named constant
+257:41:1:ZL010.magic_number:magic number 500; consider using a named constant
+278:30:1:ZL010.magic_number:magic number 500; consider using a named constant
+279:30:1:ZL010.magic_number:magic number 500; consider using a named constant
+310:60:1:ZL010.magic_number:magic number 4; consider using a named constant
+339:60:1:ZL010.magic_number:magic number 4; consider using a named constant
+369:31:1:ZL010.magic_number:magic number 5; consider using a named constant
+379:20:1:ZL010.magic_number:magic number 4; consider using a named constant
+394:45:1:ZL010.magic_number:magic number 500; consider using a named constant
+396:47:1:ZL010.magic_number:magic number 20; consider using a named constant
+398:46:1:ZL010.magic_number:magic number 200; consider using a named constant
+399:60:1:ZL010.magic_number:magic number 500; consider using a named constant
+391:1:1:ZL011.missing_doc_comment:public declaration 'main' is missing documentation
+22:9:2:ZL500.os_specific_code:Linux-specific code 'std.os.linux' may cause portability issues; consider adding OS detection guards
+346:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+392:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+406:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+105:27:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+361:37:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+105:18:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+361:28:1:ZL602.unnecessary_alloc:allocation inside loop; consider preallocating or using arena allocator
+76:27:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+86:27:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+96:27:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+105:27:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+257:29:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+295:34:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+324:34:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+361:37:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

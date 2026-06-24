@@ -1,0 +1,89 @@
+103:88:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+139:89:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+315:25:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+104:94:3:ZL003.no_empty_catch:empty catch block suppresses errors
+140:94:3:ZL003.no_empty_catch:empty catch block suppresses errors
+278:58:3:ZL003.no_empty_catch:empty catch block suppresses errors
+103:82:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+139:83:2:ZL004.no_catch_unreachable:catch unreachable suppresses error handling
+273:16:2:ZL204.no_dupe_import:duplicate import of 'timeseries' (first at line 9)
+104:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+140:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+80:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+86:9:1:ZL009.var_should_be_const:variable 'values' is never reassigned; consider using 'const'
+89:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+102:9:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+110:9:1:ZL009.var_should_be_const:variable 'points' is never reassigned; consider using 'const'
+113:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+138:9:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+142:9:1:ZL009.var_should_be_const:variable 'storage' is never reassigned; consider using 'const'
+181:9:1:ZL009.var_should_be_const:variable 'st' is never reassigned; consider using 'const'
+188:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+223:9:1:ZL009.var_should_be_const:variable 'raw_values' is never reassigned; consider using 'const'
+238:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+262:9:1:ZL009.var_should_be_const:variable 'hist_sum' is never reassigned; consider using 'const'
+269:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+276:9:1:ZL009.var_should_be_const:variable 'pool' is never reassigned; consider using 'const'
+283:9:1:ZL009.var_should_be_const:variable 'cand_bufs' is never reassigned; consider using 'const'
+289:9:1:ZL009.var_should_be_const:variable 'candidates' is never reassigned; consider using 'const'
+295:13:1:ZL009.var_should_be_const:variable 'results' is never reassigned; consider using 'const'
+312:17:1:ZL009.var_should_be_const:variable 'expected' is never reassigned; consider using 'const'
+21:29:1:ZL010.magic_number:magic number 3; consider using a named constant
+21:32:1:ZL010.magic_number:magic number 4; consider using a named constant
+21:35:1:ZL010.magic_number:magic number 5; consider using a named constant
+40:43:1:ZL010.magic_number:magic number 10; consider using a named constant
+40:47:1:ZL010.magic_number:magic number 10; consider using a named constant
+40:51:1:ZL010.magic_number:magic number 10; consider using a named constant
+40:55:1:ZL010.magic_number:magic number 10; consider using a named constant
+40:59:1:ZL010.magic_number:magic number 10; consider using a named constant
+48:29:1:ZL010.magic_number:magic number 3; consider using a named constant
+48:32:1:ZL010.magic_number:magic number 4; consider using a named constant
+48:35:1:ZL010.magic_number:magic number 5; consider using a named constant
+60:26:1:ZL010.magic_number:magic number 3; consider using a named constant
+60:29:1:ZL010.magic_number:magic number 5; consider using a named constant
+60:35:1:ZL010.magic_number:magic number 4; consider using a named constant
+61:26:1:ZL010.magic_number:magic number 4; consider using a named constant
+61:32:1:ZL010.magic_number:magic number 3; consider using a named constant
+61:35:1:ZL010.magic_number:magic number 5; consider using a named constant
+72:36:1:ZL010.magic_number:magic number 3; consider using a named constant
+72:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+73:34:1:ZL010.magic_number:magic number 3; consider using a named constant
+73:37:1:ZL010.magic_number:magic number 4; consider using a named constant
+73:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+86:32:1:ZL010.magic_number:magic number 3; consider using a named constant
+86:35:1:ZL010.magic_number:magic number 4; consider using a named constant
+86:38:1:ZL010.magic_number:magic number 5; consider using a named constant
+114:16:1:ZL010.magic_number:magic number 50; consider using a named constant
+117:26:1:ZL010.magic_number:magic number 10; consider using a named constant
+127:42:1:ZL010.magic_number:magic number 50; consider using a named constant
+128:13:1:ZL010.magic_number:magic number 50; consider using a named constant
+150:54:1:ZL010.magic_number:magic number 10; consider using a named constant
+151:61:1:ZL010.magic_number:magic number 20; consider using a named constant
+157:41:1:ZL010.magic_number:magic number 200; consider using a named constant
+175:47:1:ZL010.magic_number:magic number 200; consider using a named constant
+189:16:1:ZL010.magic_number:magic number 50; consider using a named constant
+190:65:1:ZL010.magic_number:magic number 10; consider using a named constant
+190:78:1:ZL010.magic_number:magic number 5; consider using a named constant
+197:46:1:ZL010.magic_number:magic number 50; consider using a named constant
+201:46:1:ZL010.magic_number:magic number 50; consider using a named constant
+208:44:1:ZL010.magic_number:magic number 5; consider using a named constant
+216:51:1:ZL010.magic_number:magic number 12; consider using a named constant
+224:13:1:ZL010.magic_number:magic number 20; consider using a named constant
+263:14:1:ZL010.magic_number:magic number 22; consider using a named constant
+276:68:1:ZL010.magic_number:magic number 4; consider using a named constant
+278:35:1:ZL010.magic_number:magic number 5; consider using a named constant
+282:33:1:ZL010.magic_number:magic number 3; consider using a named constant
+282:36:1:ZL010.magic_number:magic number 4; consider using a named constant
+282:39:1:ZL010.magic_number:magic number 5; consider using a named constant
+282:42:1:ZL010.magic_number:magic number 6; consider using a named constant
+282:45:1:ZL010.magic_number:magic number 5; consider using a named constant
+282:48:1:ZL010.magic_number:magic number 4; consider using a named constant
+282:51:1:ZL010.magic_number:magic number 3; consider using a named constant
+302:38:1:ZL010.magic_number:magic number 3; consider using a named constant
+303:30:1:ZL010.magic_number:magic number 4; consider using a named constant
+313:81:1:ZL010.magic_number:magic number 3; consider using a named constant
+314:74:1:ZL010.magic_number:magic number 3; consider using a named constant
+101:17:2:ZL500.os_specific_code:Linux-specific code 'std.os.linux' may cause portability issues; consider adding OS detection guards
+137:17:2:ZL500.os_specific_code:Linux-specific code 'std.os.linux' may cause portability issues; consider adding OS detection guards
+103:50:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+139:50:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards

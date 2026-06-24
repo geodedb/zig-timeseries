@@ -1,0 +1,29 @@
+102:8:1:ZL200.fn_camelcase:function 'BatchResult' should use camelCase
+139:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+192:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+254:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+336:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+393:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+394:101:2:ZL300.max_line_length:line exceeds 100 characters (135)
+435:101:2:ZL300.max_line_length:line exceeds 100 characters (117)
+470:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+423:5:2:ZL301.max_function_lines:function exceeds 80 lines (93)
+118:5:2:ZL302.max_params:function has too many parameters (8 > 6)
+237:5:2:ZL302.max_params:function has too many parameters (8 > 6)
+315:5:2:ZL302.max_params:function has too many parameters (8 > 6)
+423:5:2:ZL302.max_params:function has too many parameters (7 > 6)
+197:87:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+131:13:1:ZL009.var_should_be_const:variable 'ok_count' is never reassigned; consider using 'const'
+149:9:1:ZL009.var_should_be_const:variable 'ci' is never reassigned; consider using 'const'
+175:9:1:ZL009.var_should_be_const:variable 'ok_count' is never reassigned; consider using 'const'
+264:9:1:ZL009.var_should_be_const:variable 'ci' is never reassigned; consider using 'const'
+328:13:1:ZL009.var_should_be_const:variable 'ok_count' is never reassigned; consider using 'const'
+346:9:1:ZL009.var_should_be_const:variable 'ci' is never reassigned; consider using 'const'
+372:9:1:ZL009.var_should_be_const:variable 'ok_count' is never reassigned; consider using 'const'
+480:13:1:ZL009.var_should_be_const:variable 'ci' is never reassigned; consider using 'const'
+34:1:1:ZL011.missing_doc_comment:public declaration 'DtwResult' is missing documentation
+35:1:1:ZL011.missing_doc_comment:public declaration 'CorrelationResult' is missing documentation
+36:1:1:ZL011.missing_doc_comment:public declaration 'TsError' is missing documentation
+55:1:1:ZL011.missing_doc_comment:public declaration 'DtwOptions' is missing documentation
+78:1:1:ZL011.missing_doc_comment:public declaration 'DistanceOptions' is missing documentation
+94:1:1:ZL011.missing_doc_comment:public declaration 'BatchOptions' is missing documentation
