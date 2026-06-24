@@ -206,6 +206,7 @@ fn loadDeps(
     // `addOptions` modules end up sharing a transitive file path.
     const build_options = b.addOptions();
     build_options.addOption(bool, "with_otel", with_otel);
+    build_options.addOption([]const u8, "package_name", "timeseries");
     const build_options_mod = build_options.createModule();
 
     // Observability seam (otel). Declared as a SHARED NAMED MODULE so
