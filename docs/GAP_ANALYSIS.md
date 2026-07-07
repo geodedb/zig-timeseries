@@ -1,8 +1,10 @@
 # GAP Analysis
 
-Last updated: 2026-03-23
+Last updated: 2026-07-07
 
 Repository status: C ABI surface (18 functions) operational, Geode store/chunk-storage ported with Zig 0.15 fixes, **224 tests passing** (202 unit + 12 integration + 10 fuzz/property). Build passes in Debug, ReleaseSafe, and ReleaseFast. **9 gaps closed** across cycles (GAP-0011, GAP-0012, GAP-0013, GAP-0014, GAP-0015, GAP-0018, GAP-0019, GAP-0020, GAP-0021), **2 won't-do** (GAP-0016, GAP-0017), **1 architectural won't-do** (G-02). **Quick fixes cycle** (2026-03-23) closed Q16 (hardcoded /tmp paths), Q8 (allocating preprocess variants), GAP-0019 (docs), GAP-0018 (e2e tests), S11+S12+S14 (CI hardening). **Idiomatic API cycle** (2026-03-23) closed Q4 (idiomatic Zig API), Q19 (consistent error signaling), S2 (bounded slices at ABI boundary) -- all 5 algorithm modules (dtw, distances, matrix_profile, features, pelt) refactored to use `[]const f64` slices, `!` error unions, and result structs.
+
+**Audit findings closure cycle (2026-07-07):** the Zig 0.16.0 toolchain upgrade reopened two previously-closed gaps by breaking their code against the new stdlib API; both are re-closed this cycle. GAP-0014 (fuzz tests): `tests/fuzz.zig`'s 3 `std.testing.fuzz` targets stopped compiling under 0.16's new `*std.testing.Smith`-based `testOne` signature; ported in commit `1daae20` (`zig build fuzz` now compiles, 10/10 tests pass). GAP-0019 (`examples/basic.zig`): the example stopped compiling after `std.io.getStdOut()` was removed; ported to the current `std.Io` writer pattern and made a genuine, running demonstration of the public API in commit `db04bfe`, with a new `zig build examples` step gated into `check` so future breakage fails the build.
 
 ## Goal
 
@@ -138,6 +140,7 @@ The Go module calls into a Zig-compiled `libai_ts` via CGO. This library must ex
 | MPDist | `WindowLen int` | Robust series distance via matrix profile |
 
 Required mathematical properties (verified by property tests):
+
 - DTW: symmetric, non-negative, identity of indiscernibles
 - LB_Keogh: always <= DTW distance for same band
 - ERP: triangle inequality
@@ -160,6 +163,7 @@ Required mathematical properties (verified by property tests):
 ### R9: Scoring (`match` package -- Go-side)
 
 `FellegiSunter` logistic-regression scorer:
+
 - Configurable match/reject thresholds
 - Default weights `[-1.0, 0.5, 0.5]`
 - `Train(positives, negatives []Evidence)` for weight fitting
@@ -172,6 +176,7 @@ Required mathematical properties (verified by property tests):
 ### R11: Event Emission (`ts` root -- Go-side)
 
 Go-specific `TS` emitter with:
+
 - Per-emit timeout (default 50ms)
 - Buffered/unbuffered channels
 - Metadata extraction via `Data` interface
@@ -222,6 +227,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 ---
 
 ### GAP-0011: queryRange decompression stubbed
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#3](https://gitlab.com/devnw/zig/timeseries/-/issues/3)
 - **Category:** Feature/Partial
@@ -229,6 +235,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Resolution:** Implemented `GorillaDecoder` struct in `src/chunk_storage.zig` that reverses the Gorilla encoding (delta-of-delta timestamps, XOR value compression). Wired decoder into `queryRange` to read compressed chunks from disk, decompress, and filter to requested time range. Added 7 unit tests (encode-decode round-trip, epoch-zero, large deltas, single point, queryRange round-trip, partial range, nonexistent series) and 2 integration tests (write-query round-trip, retention pipeline).
 
 ### GAP-0012: 8 Go reference types missing
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#5](https://gitlab.com/devnw/zig/timeseries/-/issues/5)
 - **Category:** Requirement
@@ -236,6 +243,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Resolution:** Added `Gap`, `Segment`, `Evidence`, and `MatchDecision` types to `src/types.zig`. The `Series` type with `len()`, `empty()`, `slice()` methods was added to `src/store.zig`. Go-pipeline-only types (`Record`, `Cluster`, `PipelineStats`, `MatchResult`) are deferred by design -- they are used exclusively in the Go-side `match`, `cluster`, and `eval` packages, not in the Zig ABI layer. The 7 Zig-relevant types from R1 are now implemented.
 
 ### GAP-0013: Series Len/Empty/Slice methods missing
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#5](https://gitlab.com/devnw/zig/timeseries/-/issues/5)
 - **Category:** Requirement
@@ -243,13 +251,16 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Resolution:** Added `Series` struct to `src/store.zig` with `len()`, `empty()`, and `slice(start, end)` methods. `len()` returns the number of values, `empty()` returns true when `values.len == 0`, and `slice()` returns a new Series with sub-slices of both `times` and `values`. Tests verify all three methods including boundary conditions.
 
 ### GAP-0014: No fuzz tests
-- **Status: Closed** (2026-03-22)
+
+- **Status: Closed** (2026-03-22; reopened by the Zig 0.16 upgrade, re-closed 2026-07-07 via commit `1daae20`)
 - **Issue:** [#21](https://gitlab.com/devnw/zig/timeseries/-/issues/21)
 - **Category:** Test
 - **Severity:** High
 - **Resolution:** Implemented `tests/fuzz.zig` with 3 `std.testing.fuzz` targets (`constrainedDTW`, `crossCorrelate`, `pelt`) that convert raw fuzz bytes into f64 array pairs and verify no crash, non-negative distances, and valid return codes. Added 7 deterministic property-based tests with seeded PRNG covering DTW symmetry, DTW non-negativity, DTW identity, LB_Keogh <= DTW bound, ERP triangle inequality, cross-correlation symmetry, and PELT no-crash. Added `fuzz` build step to `build.zig`. All 10 tests pass in normal mode; corpus + empty-input smoke tests run automatically.
+- **2026-07-07 update:** The Zig 0.16.0 toolchain upgrade changed the `std.testing.fuzz` `testOne` callback signature to `fn(ctx, smith: *std.testing.Smith) !void`, breaking all 3 targets with compile errors. Commit `1daae20` ported `tests/fuzz.zig` to the new Smith API (verified against the installed 0.16 stdlib). Confirmed via `mise exec zig@0.16.0 -- zig build fuzz --summary all`: 5/5 build steps succeed, 10/10 tests pass.
 
 ### GAP-0015: No benchmarks
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#25](https://gitlab.com/devnw/zig/timeseries/-/issues/25)
 - **Category:** Test
@@ -257,6 +268,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Resolution:** Implemented `tests/bench.zig` with 9 benchmarks: DTW at 100/500/1000 points, CrossCorrelate, PELT, ExtractFeatures, InvariantCompute, ZNormalize, and ERP (all at 500 points). Each benchmark uses deterministic test data (sine, ramp, step functions), runs warmup + timed iterations, and reports min/mean/max ns/op. Uses volatile sink to prevent dead code elimination. Compiled with `ReleaseFast` for accurate timing via `zig build bench`. Added `bench` build step to `build.zig`. All internal functions called with `page_allocator` as required.
 
 ### GAP-0016: TestTWEDNoTimestamps not covered
+
 - **Status: Won't Do**
 - **Issue:** [#19](https://gitlab.com/devnw/zig/timeseries/-/issues/19)
 - **Category:** Test/Design
@@ -264,6 +276,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Reason:** Design decision -- the Zig ABI requires timestamp arrays for TWED (`ts_twed` signature includes `a_times` and `b_times` parameters). This is an intentional divergence from the Go reference which allowed nil timestamps. Go callers must provide valid timestamps. The ABI boundary validation (GAP-0021/S7) now rejects NaN/Inf inputs, ensuring timestamp validity.
 
 ### GAP-0017: TestCosineSimilarityMismatch not covered
+
 - **Status: Won't Do**
 - **Issue:** [#19](https://gitlab.com/devnw/zig/timeseries/-/issues/19)
 - **Category:** Test/Design
@@ -271,6 +284,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Reason:** Design decision -- the Zig ABI uses a single `len` parameter for both vectors in `ts_cosine_similarity`, making length mismatch structurally impossible at the C ABI level. Go-side validation handles the mismatch check before calling into the ABI. This is a deliberate API simplification that eliminates a class of errors by construction.
 
 ### GAP-0018: Missing e2e round-trip store/chunk tests
+
 - **Status: Closed** (2026-03-23)
 - **Issue:** [#17](https://gitlab.com/devnw/zig/timeseries/-/issues/17)
 - **Category:** Test
@@ -280,13 +294,16 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
   - **Full pipeline e2e:** Insert data -> zNormalizeAlloc (non-mutating) -> extractFeatures -> verify feature vector properties (length, mean~0, stddev~1, positive slope, histogram sums to 1).
 
 ### GAP-0019: Documentation stubs and broken links
-- **Status: Closed** (2026-03-23)
+
+- **Status: Closed** (2026-03-23; the `examples/basic.zig` portion was reopened by the Zig 0.16 upgrade, re-closed 2026-07-07 via commit `db04bfe`)
 - **Issue:** [#27](https://gitlab.com/devnw/zig/timeseries/-/issues/27)
 - **Category:** Docs
 - **Severity:** Medium
 - **Resolution:** Verified all links in `docs/README.md` point to existing files (GAP_ANALYSIS.md, REQUIREMENTS.md, QUALITY_GAP_ANALYSIS.md, PERF_GAP_ANALYSIS.md, SECURITY_GAP_ANALYSIS.md, CONTRIBUTING.md, SECURITY.md, CHANGELOG.md). No broken links remain. Updated `examples/basic.zig` from a non-functional placeholder to a comprehensive overview of library capabilities (Store, preprocessing, feature extraction, distance algorithms, PELT segmentation, chunk storage, C ABI).
+- **2026-07-07 update:** The Zig 0.16.0 toolchain upgrade removed `std.io.getStdOut()`, breaking `examples/basic.zig`'s compile (`std` has no member `io`). Commit `db04bfe` ported the example to the current `std.Io`-based file-writer pattern and converted the remaining calls into real, compiling, running demonstrations of `Store.init`/`insertMany`/`sampleBy`/`extractFeatures` plus a `ChunkStorage.writePoints`/`queryRange` round-trip. Also wired an `examples` build step into `build.zig` (and into `check`) so a future public-API or stdlib change that breaks the example now fails the build instead of silently rotting.
 
 ### GAP-0020: 8192-point silent limit undocumented
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#31](https://gitlab.com/devnw/zig/timeseries/-/issues/31)
 - **Category:** Bug
@@ -294,6 +311,7 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 - **Resolution:** Replaced all three `[8192]f64` stack buffers with `page_allocator`-backed dynamic allocations in `baselineCorrect` (preprocess.zig), `extractFeatures` (features.zig), and `mpDist` (matrix_profile.zig). All allocations are freed via `defer`. Added boundary tests at 8193 points for each function, verifying correct results instead of silent failure.
 
 ### GAP-0021: No ABI input validation for negative/null
+
 - **Status: Closed** (2026-03-22)
 - **Issue:** [#33](https://gitlab.com/devnw/zig/timeseries/-/issues/33)
 - **Category:** Security
@@ -456,31 +474,39 @@ G-02 is an architectural boundary decision, not a code gap. GQL bindings stay in
 ### Zig Library API
 
 Core types:
+
 - `Point`, `SeriesKey`, `Series`, `Gap`, `Segment`, `Alignment`, `PathPoint`
 - `InvariantSet`, `Evidence`, `Record`, `Cluster`, `MatchDecision`
 
 Store (from Geode):
+
 - `Store`, `insertMany`, `sampleBy`, `timeBucketAvg`
 
 Chunk storage (from Geode):
+
 - `ChunkConfig`, `ChunkStorage`, `writePoints`, `queryRange`, `runRetention`
 
 Preprocessing:
+
 - `resample`, `zNormalize`, `baselineCorrect`, `markGaps`, `derivative`
 
 Invariants:
+
 - `computeInvariants`
 
 Distance/alignment:
+
 - `constrainedDTW`, `derivativeDTW`, `openEndDTW`, `shapeDTW`, `softDTW`
 - `lbKeogh`, `crossCorrelate`, `sbd`
 - `lcss`, `edr`, `erp`, `twed`
 - `matrixProfile`, `mpDist`
 
 Features:
+
 - `extractFeatures`, `cosineSimilarity`
 
 Segmentation:
+
 - `peltSegment`
 
 ### C ABI Surface
