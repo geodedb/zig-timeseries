@@ -48,11 +48,11 @@ test "integration: cross-correlation -> SBD" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
 
     // Cross-correlate with self (idiomatic Zig API with bounded slices).
-    const cc_result = try lib.distances.crossCorrelate(&a, &a);
+    const cc_result = try lib.distances.crossCorrelate(std.testing.allocator, &a, &a);
     try std.testing.expect(cc_result.lag == 0);
 
     // SBD with self should be 0.
-    const sbd_dist = try lib.distances.sbd(&a, &a);
+    const sbd_dist = try lib.distances.sbd(std.testing.allocator, &a, &a);
     try std.testing.expectApproxEqAbs(sbd_dist, 0.0, 1e-10);
 }
 

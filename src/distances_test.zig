@@ -13,7 +13,7 @@ const expectApprox = std.testing.expectApproxEqAbs;
 test "cross-correlate: identical series -> lag 0, correlation 1" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
 
-    const result = try distances.crossCorrelate(&a, &a);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &a);
     try expect(result.lag == 0);
     try expectApprox(result.correlation, 1.0, 1e-10);
 }
@@ -22,7 +22,7 @@ test "cross-correlate: empty series -> error" {
     const a = [_]f64{1};
     const empty: []const f64 = &.{};
 
-    const result = distances.crossCorrelate(empty, &a);
+    const result = distances.crossCorrelate(std.testing.allocator, empty, &a);
     try expect(result == error.InvalidInput);
 }
 
@@ -30,7 +30,7 @@ test "cross-correlate: shifted series detects lag" {
     const a = [_]f64{ 0, 0, 1, 2, 3, 4, 5, 0, 0 };
     const b = [_]f64{ 0, 0, 0, 0, 1, 2, 3, 4, 5 };
 
-    const result = try distances.crossCorrelate(&a, &b);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &b);
     try expect(result.correlation > 0.8);
 }
 
@@ -44,7 +44,7 @@ test "cross-correlate FFT: identical large series -> lag 0, correlation 1" {
         a[i] = @sin(@as(f64, @floatFromInt(i)) * 0.1) + 2.0;
     }
 
-    const result = try distances.crossCorrelate(&a, &a);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &a);
     try expect(result.lag == 0);
     try expectApprox(result.correlation, 1.0, 1e-8);
 }
@@ -65,7 +65,7 @@ test "cross-correlate FFT: shifted large series detects lag" {
         }
     }
 
-    const result = try distances.crossCorrelate(&a, &b);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &b);
     try expect(result.correlation > 0.5);
 }
 
@@ -77,8 +77,8 @@ test "cross-correlate FFT: symmetry for large series" {
         b[i] = @cos(@as(f64, @floatFromInt(i)) * 0.15);
     }
 
-    const r_ab = try distances.crossCorrelate(&a, &b);
-    const r_ba = try distances.crossCorrelate(&b, &a);
+    const r_ab = try distances.crossCorrelate(std.testing.allocator, &a, &b);
+    const r_ba = try distances.crossCorrelate(std.testing.allocator, &b, &a);
     try expectApprox(r_ab.correlation, r_ba.correlation, 1e-8);
 }
 
@@ -91,8 +91,8 @@ test "cross-correlate FFT: brute-force vs FFT agreement at boundary" {
     const bf_slice: []const f64 = data[0..63];
     const fft_slice: []const f64 = &data;
 
-    const r_bf = try distances.crossCorrelate(bf_slice, bf_slice);
-    const r_fft = try distances.crossCorrelate(fft_slice, fft_slice);
+    const r_bf = try distances.crossCorrelate(std.testing.allocator, bf_slice, bf_slice);
+    const r_fft = try distances.crossCorrelate(std.testing.allocator, fft_slice, fft_slice);
 
     try expect(r_bf.lag == 0);
     try expect(r_fft.lag == 0);
@@ -110,7 +110,7 @@ test "cross-correlate FFT: different length series" {
         b[i] = @sin(@as(f64, @floatFromInt(i)) * 0.1) + 3.0;
     }
 
-    const result = try distances.crossCorrelate(&a, &b);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &b);
     try expect(result.correlation > 0.5);
 }
 
@@ -120,7 +120,7 @@ test "cross-correlate FFT: constant large series" {
         a[i] = 5.0;
     }
 
-    const result = try distances.crossCorrelate(&a, &a);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &a);
     try expect(result.lag == 0);
     try expectApprox(result.correlation, 1.0, 1e-10);
 }
@@ -183,7 +183,7 @@ test "cross-correlate FFT: matches brute-force for 80-element series" {
     }
 
     // FFT result from public API.
-    const result = try distances.crossCorrelate(&a, &b);
+    const result = try distances.crossCorrelate(std.testing.allocator, &a, &b);
 
     try expectApprox(result.correlation, bf_best_corr, 1e-8);
     try expect(result.lag == bf_best_lag);
@@ -195,7 +195,7 @@ test "SBD FFT: identical large series -> distance 0" {
         a[i] = @sin(@as(f64, @floatFromInt(i)) * 0.1) + 2.0;
     }
 
-    const dist = try distances.sbd(&a, &a);
+    const dist = try distances.sbd(std.testing.allocator, &a, &a);
     try expectApprox(dist, 0.0, 1e-8);
 }
 
@@ -206,7 +206,7 @@ test "SBD FFT: identical large series -> distance 0" {
 test "SBD: identical series -> distance 0" {
     const a = [_]f64{ 1, 2, 3, 4, 5 };
 
-    const dist = try distances.sbd(&a, &a);
+    const dist = try distances.sbd(std.testing.allocator, &a, &a);
     try expectApprox(dist, 0.0, 1e-10);
 }
 
@@ -214,7 +214,7 @@ test "SBD: empty series -> error" {
     const a = [_]f64{1};
     const empty: []const f64 = &.{};
 
-    const result = distances.sbd(empty, &a);
+    const result = distances.sbd(std.testing.allocator, empty, &a);
     try expect(result == error.InvalidInput);
 }
 
@@ -359,8 +359,8 @@ test "all distances: symmetric" {
     try expectApprox(ea, eb, 1e-10);
 
     // SBD
-    const sa = try distances.sbd(&a, &b);
-    const sb = try distances.sbd(&b, &a);
+    const sa = try distances.sbd(std.testing.allocator, &a, &b);
+    const sb = try distances.sbd(std.testing.allocator, &b, &a);
     try expectApprox(sa, sb, 1e-10);
 }
 
@@ -372,7 +372,7 @@ test "cross-correlate: second slice empty -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const empty: []const f64 = &.{};
 
-    const result = distances.crossCorrelate(&a, empty);
+    const result = distances.crossCorrelate(std.testing.allocator, &a, empty);
     try expect(result == error.InvalidInput);
 }
 
@@ -380,7 +380,7 @@ test "SBD: second slice empty -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const empty: []const f64 = &.{};
 
-    const result = distances.sbd(&a, empty);
+    const result = distances.sbd(std.testing.allocator, &a, empty);
     try expect(result == error.InvalidInput);
 }
 

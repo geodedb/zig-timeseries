@@ -183,7 +183,7 @@ const CrossCorr = struct {
 
     fn run() void {
         init();
-        const result = ts.distances.crossCorrelate(a, b) catch return;
+        const result = ts.distances.crossCorrelate(allocator, a, b) catch return;
         doNotOptimize(result.correlation);
     }
 };

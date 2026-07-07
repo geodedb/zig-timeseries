@@ -169,7 +169,7 @@ test "parallelBatchDistances SBD: matches per-pair serial" {
     try std.testing.expectEqual(@as(usize, 6), ok);
 
     for (candidates, 0..) |c, idx| {
-        const expected = try ts.distances.sbd(&query, c);
+        const expected = try ts.distances.sbd(allocator, &query, c);
         try std.testing.expectApproxEqAbs(expected, out[idx].ok, 1e-9);
     }
 }

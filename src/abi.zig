@@ -254,7 +254,9 @@ pub export fn ts_cross_correlate(
     const a_slice = a[0..n];
     const b_slice = b[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
-    const result = distances.crossCorrelate(a_slice, b_slice) catch return -1;
+    // FFI boundary has no caller allocator to thread through; use the
+    // module-level page_allocator like every other ABI export.
+    const result = distances.crossCorrelate(abi_allocator, a_slice, b_slice) catch return -1;
     lag_ptr.* = result.lag;
     corr_ptr.* = result.correlation;
     return 0;
@@ -276,7 +278,9 @@ pub export fn ts_sbd(
     const a_slice = a[0..n];
     const b_slice = b[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
-    dist_ptr.* = distances.sbd(a_slice, b_slice) catch return -1;
+    // FFI boundary has no caller allocator to thread through; use the
+    // module-level page_allocator like every other ABI export.
+    dist_ptr.* = distances.sbd(abi_allocator, a_slice, b_slice) catch return -1;
     return 0;
 }
 

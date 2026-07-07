@@ -383,7 +383,7 @@ fn runDistanceOne(
     options: DistanceOptions,
 ) BatchResult(f64) {
     const d: f64 = switch (options.metric) {
-        .sbd => distances_mod.sbd(a, b) catch |e| return .{ .err = mapTsError(e) },
+        .sbd => distances_mod.sbd(allocator, a, b) catch |e| return .{ .err = mapTsError(e) },
         .lcss => distances_mod.lcss(allocator, a, b, options.epsilon, options.delta) catch |e|
             return .{ .err = mapTsError(e) },
         .edr => distances_mod.edr(allocator, a, b, options.epsilon) catch |e|

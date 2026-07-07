@@ -126,7 +126,7 @@ test "fuzz: crossCorrelate" {
             const b_slice = pair.b[0..m];
             if (!allFinite(a_slice) or !allFinite(b_slice)) return;
 
-            const result = ts.distances.crossCorrelate(a_slice, b_slice) catch return;
+            const result = ts.distances.crossCorrelate(allocator, a_slice, b_slice) catch return;
 
             // Correlation should be a finite number.
             try std.testing.expect(isFinite(result.correlation));
@@ -287,8 +287,8 @@ test "property: distance symmetry (crossCorrelate)" {
         const b = randomF64Array(rand, n);
         defer allocator.free(b);
 
-        const r_ab = ts.distances.crossCorrelate(a, b) catch continue;
-        const r_ba = ts.distances.crossCorrelate(b, a) catch continue;
+        const r_ab = ts.distances.crossCorrelate(allocator, a, b) catch continue;
+        const r_ba = ts.distances.crossCorrelate(allocator, b, a) catch continue;
 
         // Cross-correlation value should be the same (but lag may be negated).
         try std.testing.expectApproxEqAbs(r_ab.correlation, r_ba.correlation, 1e-10);

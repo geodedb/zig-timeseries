@@ -133,8 +133,10 @@ fn crossCorrelateBruteForce(
 }
 
 /// FFT-based cross-correlation for large inputs. O(n log n) instead of O(n^2).
-/// Returns null on allocation failure.
+/// Returns null on allocation failure. Uses the caller-supplied `allocator`
+/// for its 4 scratch FFT buffers instead of a hardcoded global allocator.
 fn crossCorrelateFFT(
+    allocator: std.mem.Allocator,
     a: []const f64,
     mean_a: f64,
     norm_a: f64,
@@ -142,7 +144,6 @@ fn crossCorrelateFFT(
     mean_b: f64,
     norm_b: f64,
 ) ?CorrelationResult {
-    const page_allocator = std.heap.page_allocator;
     const n = a.len;
     const m = b.len;
     const conv_len = n + m - 1;
@@ -150,14 +151,14 @@ fn crossCorrelateFFT(
 
     if (fft_size > MAX_ALLOC_F64) return null;
 
-    const ar = page_allocator.alloc(f64, fft_size) catch return null;
-    defer page_allocator.free(ar);
-    const ai = page_allocator.alloc(f64, fft_size) catch return null;
-    defer page_allocator.free(ai);
-    const br = page_allocator.alloc(f64, fft_size) catch return null;
-    defer page_allocator.free(br);
-    const bi = page_allocator.alloc(f64, fft_size) catch return null;
-    defer page_allocator.free(bi);
+    const ar = allocator.alloc(f64, fft_size) catch return null;
+    defer allocator.free(ar);
+    const ai = allocator.alloc(f64, fft_size) catch return null;
+    defer allocator.free(ai);
+    const br = allocator.alloc(f64, fft_size) catch return null;
+    defer allocator.free(br);
+    const bi = allocator.alloc(f64, fft_size) catch return null;
+    defer allocator.free(bi);
 
     for (0..fft_size) |i| {
         ar[i] = if (i < n) a[i] - mean_a else 0;
@@ -207,7 +208,10 @@ fn crossCorrelateFFT(
 /// Normalized cross-correlation returning optimal lag and correlation.
 /// Uses FFT-based O(n log n) algorithm for large inputs and brute-force
 /// O(n^2) for small inputs (n,m < 64) where FFT overhead is not worthwhile.
+/// `allocator` is used only for the FFT path's scratch buffers; the
+/// brute-force path performs no allocation.
 pub fn crossCorrelate(
+    allocator: std.mem.Allocator,
     a: []const f64,
     b: []const f64,
 ) TsError!CorrelationResult {
@@ -252,7 +256,7 @@ pub fn crossCorrelate(
 
     // Use FFT-based O(n log n) cross-correlation for larger inputs.
     // Falls back to brute-force if allocation fails.
-    if (crossCorrelateFFT(a, mean_a, norm_a, b, mean_b, norm_b)) |result| {
+    if (crossCorrelateFFT(allocator, a, mean_a, norm_a, b, mean_b, norm_b)) |result| {
         return result;
     }
 
@@ -260,11 +264,13 @@ pub fn crossCorrelate(
 }
 
 /// Shape-based distance (1 - max NCC), range [0, 2].
+/// `allocator` is threaded through to `crossCorrelate`'s FFT path.
 pub fn sbd(
+    allocator: std.mem.Allocator,
     a: []const f64,
     b: []const f64,
 ) TsError!f64 {
-    const result = try crossCorrelate(a, b);
+    const result = try crossCorrelate(allocator, a, b);
     return 1.0 - result.correlation;
 }
 
