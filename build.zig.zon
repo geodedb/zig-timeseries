@@ -1,6 +1,6 @@
 .{
     .name = .timeseries,
-    .version = "0.1.10",
+    .version = "0.1.11",
     .fingerprint = 0xf55a0ccd3a300188,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
