@@ -306,6 +306,7 @@ pub export fn ts_pelt(
     const cps_len_ptr = cps_len orelse return -1;
     if (values_len < 0) return -1;
     if (cps_cap < 0) return -1;
+    if (!std.math.isFinite(penalty)) return -1;
     const n: usize = @intCast(values_len);
     if (n > 0) {
         const values_ptr = values orelse return -1;

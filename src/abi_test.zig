@@ -391,6 +391,21 @@ test "ABI: ts_pelt NaN input -> error" {
     try expect(abi.ts_pelt(&values, 10, 5.0, 2, &cps, &cps_len, 10) == -1);
 }
 
+test "ABI: ts_pelt NaN penalty -> error" {
+    const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
+    var cps: [10]i32 = undefined;
+    var cps_len: c_int = undefined;
+    try expect(abi.ts_pelt(&values, 10, std.math.nan(f64), 2, &cps, &cps_len, 10) == -1);
+}
+
+test "ABI: ts_pelt Inf penalty -> error" {
+    const values = [_]f64{ 1, 1, 1, 1, 1, 10, 10, 10, 10, 10 };
+    var cps: [10]i32 = undefined;
+    var cps_len: c_int = undefined;
+    try expect(abi.ts_pelt(&values, 10, std.math.inf(f64), 2, &cps, &cps_len, 10) == -1);
+    try expect(abi.ts_pelt(&values, 10, -std.math.inf(f64), 2, &cps, &cps_len, 10) == -1);
+}
+
 // Negative length (S1)
 
 test "ABI: ts_dtw negative length -> error" {
