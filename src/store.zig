@@ -246,7 +246,13 @@ pub const Store = struct {
             // Register the reverse mapping for loadFromDisk.
             const id_gop = try self.chunk_id_to_hash.getOrPut(chunk_id);
             if (!id_gop.found_existing) {
-                id_gop.value_ptr.* = hk;
+                // SEC-3: don't commit the mapping until saveSeriesKeyMeta
+                // succeeds. If it fails (e.g. error.MetricNameTooLong), roll
+                // back the just-added entry so a retried insertMany with the
+                // same key sees found_existing == false again and re-runs
+                // the guard — otherwise chunk data could be persisted with
+                // no corresponding series_meta.dat record.
+                errdefer _ = self.chunk_id_to_hash.remove(chunk_id);
 
                 // Save series key metadata for loadFromDisk recovery. Only
                 // needed the first time we see this chunk_id in this
@@ -255,6 +261,8 @@ pub const Store = struct {
                 // (already persisted). Gating avoids an O(existing-series)
                 // file rescan on every insertMany call.
                 try self.saveSeriesKeyMeta(key, chunk_id);
+
+                id_gop.value_ptr.* = hk;
             }
 
             const gop = try self.unflushed.getOrPut(hk);
@@ -1329,6 +1337,50 @@ test "store: insertMany rejects metric names over MAX_METRIC_LEN at the write bo
 
     const open_result = std.Io.Dir.cwd().openFile(io, meta_path, .{});
     try std.testing.expectError(error.FileNotFound, open_result);
+}
+
+test "store: insertMany rolls back chunk_id_to_hash registration when saveSeriesKeyMeta fails, so a retry re-triggers the guard (SEC-3 retry)" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_long_metric_retry_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var st = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+    defer st.deinit();
+
+    const long_metric = try allocator.alloc(u8, MAX_METRIC_LEN + 1);
+    defer allocator.free(long_metric);
+    @memset(long_metric, 'a');
+
+    const key = SeriesKey{ .device_id = 1, .metric = long_metric };
+
+    // First call: saveSeriesKeyMeta fails with error.MetricNameTooLong. If
+    // the chunk_id_to_hash registration were not rolled back, the entry
+    // would remain committed and a retry would see found_existing == true,
+    // skip the guard, and silently persist chunk data with no
+    // series_meta.dat record (orphaned/unrecoverable series data).
+    const result1 = st.insertMany(key, &.{.{ .ts = 1000, .value = 1 }});
+    try std.testing.expectError(error.MetricNameTooLong, result1);
+
+    // Second call with the SAME key must ALSO fail with the same error —
+    // proving the guard is still active (the rollback worked).
+    const result2 = st.insertMany(key, &.{.{ .ts = 2000, .value = 2 }});
+    try std.testing.expectError(error.MetricNameTooLong, result2);
+
+    // No series_meta.dat should have been created across either attempt.
+    const cs = st.chunk_store.?;
+    const meta_path = try std.fmt.allocPrint(allocator, "{s}/series_meta.dat", .{cs.data_dir});
+    defer allocator.free(meta_path);
+    const open_result = std.Io.Dir.cwd().openFile(io, meta_path, .{});
+    try std.testing.expectError(error.FileNotFound, open_result);
+
+    // The in-memory registration must not be left dangling either.
+    const hk = st.hashKey(key);
+    const chunk_id = chunkSeriesId(hk);
+    try std.testing.expect(st.chunk_id_to_hash.get(chunk_id) == null);
 }
 
 test "store: loadFromDisk rejects oversized metric_len in series_meta.dat" {
