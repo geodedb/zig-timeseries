@@ -1618,7 +1618,7 @@ test "chunk_storage: init creates nested missing directory components and round-
     }
 }
 
-test "chunk_storage: init succeeds when the entire data_dir tree already exists (concurrent-createDir robustness)" {
+test "chunk_storage: init succeeds against a fully pre-existing data_dir tree" {
     // Every component of data_dir is created ahead of time (simulating the
     // "someone else already created it" outcome of a concurrent-create
     // race), so openDataDirNoFollow's walk finds every component via a
@@ -1645,33 +1645,28 @@ test "chunk_storage: init succeeds when the entire data_dir tree already exists 
     try std.testing.expect(storage.meta_file != null);
 }
 
-test "chunk_storage: openOrCreateNoFollow reopens an existing real file instead of failing (concurrent file-create robustness)" {
-    // openOrCreateNoFollow's exclusive-create can lose a race to a concurrent
-    // creator and return error.PathAlreadyExists; the fix reopens the file
-    // no-follow. This test exercises that reopen path directly: a first call
-    // creates the file, and a second call for the same name must reopen the
-    // real file (not fail, and not follow a symlink). Data written through the
-    // first handle must be visible through the second.
+test "chunk_storage: openOrCreateNoFollow reopens an existing real file (fast path)" {
+    // Smoke test for the plain "already exists" fast path: a second call for a
+    // name that is now a real file returns via the initial no-follow openFile
+    // (NOT the concurrent-create catch branch). Kept as a basic behavioral
+    // check; the actual race branch is covered by the two-thread test below.
     if (@import("builtin").os.tag == .windows) return;
     const io = std.Io.Threaded.global_single_threaded.io();
 
     const pid = std.os.linux.getpid();
     var root_buf: [96]u8 = undefined;
-    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_reopen_race_{d}", .{pid}) catch unreachable;
+    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_reopen_fast_{d}", .{pid}) catch unreachable;
     try std.Io.Dir.cwd().createDirPath(io, root_dir);
     defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
 
     var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .follow_symlinks = false });
     defer dir.close(io);
 
-    // First call creates the file exclusively.
     var f1 = try openOrCreateNoFollow(io, dir, "race.dat");
     const payload = "concurrent-reopen-marker";
     try f1.writePositionalAll(io, payload, 0);
     f1.close(io);
 
-    // Second call must reopen the same real file (the exact path the
-    // PathAlreadyExists branch takes after losing the create race).
     var f2 = try openOrCreateNoFollow(io, dir, "race.dat");
     defer f2.close(io);
     var read_buf: [64]u8 = undefined;
@@ -1680,7 +1675,80 @@ test "chunk_storage: openOrCreateNoFollow reopens an existing real file instead 
     try std.testing.expectEqualStrings(payload, read_buf[0..payload.len]);
 }
 
-test "chunk_storage: init succeeds when an intermediate component is created out-of-band (concurrent-createDir robustness)" {
+test "chunk_storage: openOrCreateNoFollow tolerates a concurrent file-create race (exercises the PathAlreadyExists branch)" {
+    // Races two real OS threads into openOrCreateNoFollow on the SAME
+    // not-yet-existing filename. Both observe FileNotFound from the initial
+    // no-follow openFile, so both fall through to createFile(.exclusive=true);
+    // exactly one wins (O_CREAT|O_EXCL), and the loser observes
+    // error.PathAlreadyExists and MUST recover via the no-follow reopen branch
+    // rather than failing. With the fix reverted (bare `try createFile`), the
+    // loser propagates PathAlreadyExists and this test fails -- so it provides
+    // genuine regression coverage for the 107fefd fix. Repeated across trials
+    // on fresh files to reliably hit the race window.
+    if (@import("builtin").os.tag == .windows) return;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const pid = std.os.linux.getpid();
+
+    const Ctx = struct {
+        io: std.Io,
+        dir: std.Io.Dir,
+        name: []const u8,
+        ready: *std.atomic.Value(u32),
+        go: *std.atomic.Value(bool),
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.go.load(.acquire)) {
+                std.atomic.spinLoopHint();
+            }
+            var file = openOrCreateNoFollow(self.io, self.dir, self.name) catch |e| {
+                self.err = e;
+                return;
+            };
+            file.close(self.io);
+        }
+    };
+
+    var trial: usize = 0;
+    while (trial < 20) : (trial += 1) {
+        var root_buf: [96]u8 = undefined;
+        const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_file_race_{d}_{d}", .{ pid, trial }) catch unreachable;
+        try std.Io.Dir.cwd().createDirPath(io, root_dir);
+        defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+        var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .follow_symlinks = false });
+        defer dir.close(io);
+
+        var ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+        var go: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+        var ctx_a: Ctx = .{ .io = io, .dir = dir, .name = "race.dat", .ready = &ready, .go = &go };
+        var ctx_b: Ctx = .{ .io = io, .dir = dir, .name = "race.dat", .ready = &ready, .go = &go };
+
+        const t_a = try std.Thread.spawn(.{}, Ctx.run, .{&ctx_a});
+        const t_b = try std.Thread.spawn(.{}, Ctx.run, .{&ctx_b});
+
+        while (ready.load(.acquire) < 2) {
+            std.atomic.spinLoopHint();
+        }
+        go.store(true, .release);
+
+        t_a.join();
+        t_b.join();
+
+        if (ctx_a.err) |e| {
+            std.debug.print("trial {d}: thread A failed: {s}\n", .{ trial, @errorName(e) });
+            return e;
+        }
+        if (ctx_b.err) |e| {
+            std.debug.print("trial {d}: thread B failed: {s}\n", .{ trial, @errorName(e) });
+            return e;
+        }
+    }
+}
+
+test "chunk_storage: init succeeds when an intermediate data_dir component pre-exists" {
     // Only the FIRST intermediate component ("nested") is pre-created by a
     // separate actor before init runs; the second ("sub") still needs to be
     // created by openDataDirNoFollow's own walk. Proves partial concurrent
