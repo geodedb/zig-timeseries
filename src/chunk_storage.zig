@@ -112,7 +112,15 @@ fn openDataDirNoFollow(io: std.Io, data_dir: []const u8) !std.Io.Dir {
             // Component doesn't exist yet: create it, then open it the same
             // NOFOLLOW way (guards a TOCTOU race where something other than
             // a plain directory appears between the two calls).
-            try current.createDir(io, component, .default_dir);
+            current.createDir(io, component, .default_dir) catch |create_err| switch (create_err) {
+                // Benign concurrent-create race (e.g. two processes/threads
+                // standing up the same data_dir tree at once): someone else
+                // won the create, fall through to the no-follow reopen
+                // below. That reopen still fails closed (SymLinkLoop) if
+                // what appeared is a planted symlink rather than a real dir.
+                error.PathAlreadyExists => {},
+                else => return create_err,
+            };
             break :blk try current.openDir(io, component, no_follow);
         };
 
@@ -1592,6 +1600,144 @@ test "chunk_storage: init creates nested missing directory components and round-
         for (0..10) |j| {
             try std.testing.expectEqual(points.items[j].ts, result[j].ts);
             try std.testing.expectEqual(points.items[j].value, result[j].value);
+        }
+    }
+}
+
+test "chunk_storage: init succeeds when the entire data_dir tree already exists (concurrent-createDir robustness)" {
+    // Every component of data_dir is created ahead of time (simulating the
+    // "someone else already created it" outcome of a concurrent-create
+    // race), so openDataDirNoFollow's walk finds every component via a
+    // plain openDir and never needs to create anything. Proves the
+    // already-exists path works end to end through ChunkStorage.init.
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var root_buf: [96]u8 = undefined;
+    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_concurrent_predug_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+    var data_dir_buf: [128]u8 = undefined;
+    const data_dir = std.fmt.bufPrint(&data_dir_buf, "{s}/nested/sub", .{root_dir}) catch unreachable;
+
+    // Pre-create every path component before init ever runs.
+    try std.Io.Dir.cwd().createDirPath(io, data_dir);
+
+    var storage = try ChunkStorage.init(ally, data_dir, .{});
+    defer storage.deinit();
+
+    try std.testing.expect(storage.data_file != null);
+    try std.testing.expect(storage.meta_file != null);
+}
+
+test "chunk_storage: init succeeds when an intermediate component is created out-of-band (concurrent-createDir robustness)" {
+    // Only the FIRST intermediate component ("nested") is pre-created by a
+    // separate actor before init runs; the second ("sub") still needs to be
+    // created by openDataDirNoFollow's own walk. Proves partial concurrent
+    // creation (a plausible real-world interleaving) doesn't trip up the
+    // walk either.
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var root_buf: [96]u8 = undefined;
+    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_concurrent_partial_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+    var nested_buf: [128]u8 = undefined;
+    const nested_dir = std.fmt.bufPrint(&nested_buf, "{s}/nested", .{root_dir}) catch unreachable;
+    // Create the intermediate component "out-of-band", as a real directory,
+    // before init ever sees the path.
+    try std.Io.Dir.cwd().createDirPath(io, nested_dir);
+
+    var data_dir_buf: [128]u8 = undefined;
+    const data_dir = std.fmt.bufPrint(&data_dir_buf, "{s}/sub", .{nested_dir}) catch unreachable;
+
+    var storage = try ChunkStorage.init(ally, data_dir, .{});
+    defer storage.deinit();
+
+    try std.testing.expect(storage.data_file != null);
+    try std.testing.expect(storage.meta_file != null);
+}
+
+test "chunk_storage: openDataDirNoFollow tolerates concurrent creation of the same directory component (concurrent-createDir robustness)" {
+    // Directly races two real OS threads against openDataDirNoFollow (the
+    // function actually fixed) on a freshly-created path, isolated from
+    // ChunkStorage.init's separate chunks.dat/chunk_meta.dat creation (a
+    // different code path with its own, out-of-scope race handling). Both
+    // threads target the exact same not-yet-existing nested component, so
+    // one of them is expected to observe the other's createDir having won
+    // (error.PathAlreadyExists) and must recover by reopening no-follow
+    // instead of failing init spuriously. Repeated over several trials
+    // against fresh directories to make the race window likely to be hit.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const pid = std.os.linux.getpid();
+
+    // A tiny spin-barrier so both threads enter openDataDirNoFollow as close
+    // to simultaneously as possible, maximizing the odds of both observing
+    // the final ("sub") component as FileNotFound before either wins the
+    // create -- the exact TOCTOU window the fix targets.
+    const Ctx = struct {
+        io: std.Io,
+        data_dir: []const u8,
+        ready: *std.atomic.Value(u32),
+        go: *std.atomic.Value(bool),
+        err: ?anyerror = null,
+
+        fn run(self: *@This()) void {
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.go.load(.acquire)) {
+                std.atomic.spinLoopHint();
+            }
+            var dir = openDataDirNoFollow(self.io, self.data_dir) catch |e| {
+                self.err = e;
+                return;
+            };
+            dir.close(self.io);
+        }
+    };
+
+    var trial: usize = 0;
+    while (trial < 20) : (trial += 1) {
+        var root_buf: [96]u8 = undefined;
+        const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_concurrent_race_{d}_{d}", .{ pid, trial }) catch unreachable;
+        defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+        var nested_buf: [128]u8 = undefined;
+        const nested_dir = std.fmt.bufPrint(&nested_buf, "{s}/nested", .{root_dir}) catch unreachable;
+        // Pre-create every component except the final one, so both threads
+        // race on creating exactly the same (final) missing component
+        // rather than potentially desyncing across multiple levels.
+        try std.Io.Dir.cwd().createDirPath(io, nested_dir);
+
+        var data_dir_buf: [128]u8 = undefined;
+        const data_dir = std.fmt.bufPrint(&data_dir_buf, "{s}/sub", .{nested_dir}) catch unreachable;
+
+        var ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+        var go: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+        var ctx_a: Ctx = .{ .io = io, .data_dir = data_dir, .ready = &ready, .go = &go };
+        var ctx_b: Ctx = .{ .io = io, .data_dir = data_dir, .ready = &ready, .go = &go };
+
+        const t_a = try std.Thread.spawn(.{}, Ctx.run, .{&ctx_a});
+        const t_b = try std.Thread.spawn(.{}, Ctx.run, .{&ctx_b});
+
+        while (ready.load(.acquire) < 2) {
+            std.atomic.spinLoopHint();
+        }
+        go.store(true, .release);
+
+        t_a.join();
+        t_b.join();
+
+        if (ctx_a.err) |e| {
+            std.debug.print("trial {d}: thread A failed: {s}\n", .{ trial, @errorName(e) });
+            return e;
+        }
+        if (ctx_b.err) |e| {
+            std.debug.print("trial {d}: thread B failed: {s}\n", .{ trial, @errorName(e) });
+            return e;
         }
     }
 }
