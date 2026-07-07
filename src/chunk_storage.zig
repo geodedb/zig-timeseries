@@ -446,7 +446,6 @@ pub const ChunkStorage = struct {
             .permissions = securePermissions(),
             .resolve_beneath = true,
         });
-        errdefer file.close(io);
 
         // Determine current file length so new writes append after existing data.
         const end_pos = file.length(io) catch 0;
@@ -460,7 +459,6 @@ pub const ChunkStorage = struct {
             .permissions = securePermissions(),
             .resolve_beneath = true,
         });
-        errdefer meta_file.close(io);
 
         const meta_end_pos = meta_file.length(io) catch 0;
 
@@ -475,6 +473,14 @@ pub const ChunkStorage = struct {
             .meta_offset = meta_end_pos,
             .data_dir = try allocator.dupe(u8, data_dir),
         };
+        // self now owns both file handles plus chunks/index/data_dir — a
+        // single errdefer covers all of them so any error surfaced by
+        // loadChunkMeta (e.g. error.CorruptMeta from a corrupt trailing
+        // chunk_meta.dat record) can't leak the accumulated state. The
+        // per-file errdefers that used to guard `file`/`meta_file`
+        // individually are intentionally removed here to avoid a
+        // double-close once self.deinit() takes over.
+        errdefer self.deinit();
 
         // Load persisted chunk metadata if available.
         try self.loadChunkMeta();
@@ -1075,6 +1081,59 @@ test "chunk_storage: deserializeChunkMeta rejects oversized num_points" {
     std.mem.writeInt(u64, buf[off..][0..8], 0, .little); // page_offset
 
     const result = ChunkStorage.deserializeChunkMeta(&buf);
+    try std.testing.expectError(error.CorruptMeta, result);
+}
+
+test "chunk_storage: init leak-free when loadChunkMeta returns error.CorruptMeta" {
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_init_corrupt_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    // Phase 1: write one valid chunk normally.
+    {
+        var storage = try ChunkStorage.init(ally, test_dir, .{});
+        defer storage.deinit();
+        try storage.writePoints(1, &[_]store.Point{.{ .ts = 1000, .value = 1 }});
+    }
+
+    // Phase 2: append a corrupt trailing record directly to chunk_meta.dat
+    // (invalid compression tag), simulating on-disk corruption after the
+    // valid record.
+    {
+        var meta_path_buf: [160]u8 = undefined;
+        const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/chunk_meta.dat", .{test_dir}) catch unreachable;
+        const file = try std.Io.Dir.cwd().openFile(io, meta_path, .{ .mode = .read_write });
+        defer file.close(io);
+        const end_pos = file.length(io) catch 0;
+
+        var buf: [ChunkStorage.chunk_meta_size]u8 = undefined;
+        var off: usize = 0;
+        std.mem.writeInt(u64, buf[off..][0..8], 2, .little); // series_id
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // start_ts
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // end_ts
+        off += 8;
+        std.mem.writeInt(u32, buf[off..][0..4], 1, .little); // num_points
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // compressed_size
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // uncompressed_size
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 99, .little); // invalid compression tag
+        off += 4;
+        std.mem.writeInt(u64, buf[off..][0..8], 0, .little); // page_offset
+        try file.writePositionalAll(io, &buf, end_pos);
+    }
+
+    // Phase 3: re-init should surface error.CorruptMeta with zero leaks —
+    // ChunkStorage.init's internal chunks/index/data_dir must all be freed
+    // on this error path.
+    const result = ChunkStorage.init(ally, test_dir, .{});
     try std.testing.expectError(error.CorruptMeta, result);
 }
 

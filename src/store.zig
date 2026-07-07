@@ -137,6 +137,7 @@ pub const Store = struct {
             defer allocator.free(ts_dir);
 
             const cs = try allocator.create(chunk_storage.ChunkStorage);
+            errdefer allocator.destroy(cs);
             cs.* = try chunk_storage.ChunkStorage.init(allocator, ts_dir, config.chunk_config);
             self.chunk_store = cs;
         }
@@ -1175,6 +1176,68 @@ test "store: loadFromDisk rejects oversized metric_len in series_meta.dat" {
     try file.writePositionalAll(io, &buf, 0);
 
     const result = st.loadFromDisk();
+    try std.testing.expectError(error.CorruptMeta, result);
+}
+
+test "store: initWithConfig leak-free when ChunkStorage.init returns error.CorruptMeta" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_init_corrupt_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    // Phase 1: create a store, write one valid chunk, and let deinit flush
+    // + close cleanly.
+    {
+        var st = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 1 },
+        });
+        defer st.deinit();
+        try st.insertMany(.{ .device_id = 1, .metric = "cpu" }, &.{.{ .ts = 1000, .value = 1 }});
+    }
+
+    // Phase 2: append a corrupt trailing record directly to chunk_meta.dat
+    // so the next ChunkStorage.init (invoked transitively by
+    // Store.initWithConfig) fails with error.CorruptMeta.
+    {
+        var meta_path_buf: [160]u8 = undefined;
+        const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/timeseries/chunk_meta.dat", .{test_dir}) catch unreachable;
+        const file = try std.Io.Dir.cwd().openFile(io, meta_path, .{ .mode = .read_write });
+        defer file.close(io);
+        const end_pos = file.length(io) catch 0;
+
+        // ChunkMeta is fixed-size when serialized: 8+8+8+4+4+4+4+8 = 48 bytes
+        // (see chunk_storage.zig's chunk_meta_size).
+        var buf: [48]u8 = undefined;
+        var off: usize = 0;
+        std.mem.writeInt(u64, buf[off..][0..8], 2, .little); // series_id
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // start_ts
+        off += 8;
+        std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // end_ts
+        off += 8;
+        std.mem.writeInt(u32, buf[off..][0..4], 1, .little); // num_points
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // compressed_size
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // uncompressed_size
+        off += 4;
+        std.mem.writeInt(u32, buf[off..][0..4], 99, .little); // invalid compression tag
+        off += 4;
+        std.mem.writeInt(u64, buf[off..][0..8], 0, .little); // page_offset
+        try file.writePositionalAll(io, &buf, end_pos);
+    }
+
+    // Phase 3: re-init should surface error.CorruptMeta with zero leaks —
+    // both the heap-allocated ChunkStorage (`cs`) and its internal
+    // chunks/index/data_dir must be freed on this error path.
+    const result = Store.initWithConfig(allocator, .{
+        .data_dir = test_dir,
+        .chunk_config = .{ .max_points_per_chunk = 1 },
+    });
     try std.testing.expectError(error.CorruptMeta, result);
 }
 
