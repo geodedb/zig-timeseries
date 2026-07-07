@@ -611,13 +611,15 @@ pub const Store = struct {
         const cs = self.chunk_store orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
-        defer self.allocator.free(meta_path);
-
         // Append-only: open for appending, create if needed. NEW-3: use the
         // open-or-exclusive-create helper so a pre-planted symlink at
-        // meta_path causes a loud failure instead of a followed write.
-        const file = try chunk_storage.openOrCreateNoFollow(io, meta_path);
+        // series_meta.dat causes a loud failure instead of a followed
+        // write. NEW-4: open it RELATIVE to `cs.dir` (a handle already
+        // resolved component-by-component with no-follow semantics) rather
+        // than via a concatenated `"{data_dir}/series_meta.dat"` string, so
+        // a symlink in a directory component of data_dir can't smuggle the
+        // write path out from under us either.
+        const file = try chunk_storage.openOrCreateNoFollow(io, cs.dir, "series_meta.dat");
         defer file.close(io);
 
         // Check if this chunk_id is already in the file to avoid duplicates.
@@ -673,16 +675,17 @@ pub const Store = struct {
         const cs = self.chunk_store orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
-        defer self.allocator.free(meta_path);
-
         // SEC-1: never follow a symlink at this path — a planted symlink
         // pointing elsewhere could otherwise cause an attacker-controlled
         // file's bytes to be read and parsed as trusted series metadata.
         // loadFromDisk already tolerates a missing/failed series_meta.dat
         // (this whole open is wrapped in `catch return`), so blocking the
         // symlink here degrades gracefully instead of disclosing data.
-        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{ .follow_symlinks = false }) catch return;
+        // NEW-4: open RELATIVE to `cs.dir` (already resolved component-by-
+        // component with no-follow semantics) instead of via a
+        // concatenated path string, so a directory-component symlink in
+        // data_dir can't redirect this read either.
+        const file = cs.dir.openFile(io, "series_meta.dat", .{ .follow_symlinks = false }) catch return;
         defer file.close(io);
 
         var pos: u64 = 0;
@@ -731,12 +734,9 @@ pub const Store = struct {
         const cs = self.chunk_store orelse return null;
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
-        defer self.allocator.free(meta_path);
-
         // SEC-1: same rationale as loadAllSeriesKeyMeta — never follow a
-        // symlink planted at this path.
-        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{ .follow_symlinks = false }) catch return null;
+        // symlink planted at this path. NEW-4: open relative to `cs.dir`.
+        const file = cs.dir.openFile(io, "series_meta.dat", .{ .follow_symlinks = false }) catch return null;
         defer file.close(io);
 
         var pos: u64 = 0;

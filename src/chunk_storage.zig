@@ -18,30 +18,33 @@ pub fn securePermissions() std.Io.File.Permissions {
 }
 
 /// Open an existing persistence file for read-write without following a
-/// symlink planted at `path`, creating it exclusively if it does not
-/// already exist.
+/// symlink planted at `name`, creating it exclusively if it does not
+/// already exist. `name` is opened RELATIVE to `dir` (a bare filename, no
+/// directory separators expected) so that no directory-component symlink
+/// can be smuggled in — see `openDataDirNoFollow` for why `dir` itself is
+/// guaranteed symlink-free (NEW-4).
 ///
 /// NEW-3: `std.Io.Dir.CreateFileOptions` has no `follow_symlinks` field, and
 /// its `.resolve_beneath` option is a silent no-op on Linux (RESOLVE_BENEATH
 /// only exists in Darwin/FreeBSD's `posix.O`; Linux's has no such field). A
-/// bare `createFile` therefore happily follows a pre-planted symlink at a
-/// low-entropy, often /tmp-based data_dir path and writes serialized data
-/// straight through to whatever file the symlink targets.
+/// bare `createFile` therefore happily follows a pre-planted symlink at
+/// `name` and writes serialized data straight through to whatever file the
+/// symlink targets.
 ///
-/// Strategy: try to `openFile` the existing path with `.follow_symlinks =
+/// Strategy: try to `openFile` the existing name with `.follow_symlinks =
 /// false` first.
 ///   * If it succeeds, the path was a real (non-symlink) file — use that
 ///     handle. `openFile` never truncates, so append/no-truncate semantics
 ///     are preserved exactly as before.
-///   * If it fails with `error.FileNotFound`, the path doesn't exist yet —
+///   * If it fails with `error.FileNotFound`, the name doesn't exist yet —
 ///     create it with `.exclusive = true` (`O_CREAT | O_EXCL`), which fails
-///     loudly (`error.PathAlreadyExists`) if the path already exists as
+///     loudly (`error.PathAlreadyExists`) if the name already exists as
 ///     anything, including a symlink, instead of following it.
-///   * Any other error (e.g. `error.SymLinkLoop` when the path *is* a
+///   * Any other error (e.g. `error.SymLinkLoop` when the name *is* a
 ///     symlink) is propagated so the caller fails closed rather than
 ///     silently writing through an attacker-controlled redirect.
-pub fn openOrCreateNoFollow(io: std.Io, path: []const u8) std.Io.File.OpenError!std.Io.File {
-    const existing = std.Io.Dir.cwd().openFile(io, path, .{
+pub fn openOrCreateNoFollow(io: std.Io, dir: std.Io.Dir, name: []const u8) std.Io.File.OpenError!std.Io.File {
+    const existing = dir.openFile(io, name, .{
         .mode = .read_write,
         .follow_symlinks = false,
     });
@@ -51,11 +54,83 @@ pub fn openOrCreateNoFollow(io: std.Io, path: []const u8) std.Io.File.OpenError!
         if (err != error.FileNotFound) return err;
     }
 
-    return std.Io.Dir.cwd().createFile(io, path, .{
+    return dir.createFile(io, name, .{
         .read = true,
         .exclusive = true,
         .permissions = securePermissions(),
     });
+}
+
+/// Resolve `data_dir` to an open, symlink-safe `Dir` handle by walking each
+/// path component and opening it with `.follow_symlinks = false`, creating
+/// any missing intermediate directories along the way.
+///
+/// NEW-4: `openOrCreateNoFollow`'s `follow_symlinks = false` (and plain
+/// `O_NOFOLLOW` generally) only ever guards the FINAL component of a path
+/// passed to `openat`. Every prior slash-separated directory component in a
+/// concatenated path string like `"{data_dir}/chunks.dat"` is still
+/// transparently dereferenced by the kernel during path resolution. That
+/// means:
+///   * a symlink planted AT `data_dir` itself (its own leaf component), or
+///   * a symlink planted at any ANCESTOR directory of `data_dir`,
+/// silently redirects every persistence file into an attacker-chosen
+/// directory, even though the leaf filename (`chunks.dat`, etc.) is opened
+/// with `follow_symlinks = false`.
+///
+/// There is no portable `openat2(RESOLVE_NO_SYMLINKS)` exposed by `std.Io`,
+/// and `OpenFileOptions.resolve_beneath` is a documented no-op on Linux, so
+/// the only way to close this gap is to resolve the directory ourselves,
+/// one component at a time: each component is opened with
+/// `.follow_symlinks = false` relative to the previous component's
+/// already-open (and therefore already-verified-non-symlink) handle. Any
+/// component that turns out to be a symlink makes that `openDir` call fail
+/// (typically `error.SymLinkLoop`), which is propagated so the caller fails
+/// closed instead of following it — this closes both the leaf case and the
+/// ancestor case, since every component on the path is individually
+/// verified.
+///
+/// Absolute paths are resolved from the filesystem root; relative paths
+/// from the process's current working directory. Callers are expected to
+/// have already rejected `..` components (see `ChunkStorage.init`).
+fn openDataDirNoFollow(io: std.Io, data_dir: []const u8) !std.Io.Dir {
+    const no_follow: std.Io.Dir.OpenOptions = .{ .follow_symlinks = false };
+    const is_absolute = std.fs.path.isAbsolute(data_dir);
+
+    var current: std.Io.Dir = if (is_absolute)
+        try std.Io.Dir.cwd().openDir(io, "/", no_follow)
+    else
+        std.Io.Dir.cwd();
+    var owns_current = is_absolute;
+    errdefer if (owns_current) current.close(io);
+
+    var it = std.mem.tokenizeScalar(u8, data_dir, '/');
+    while (it.next()) |component| {
+        if (std.mem.eql(u8, component, ".")) continue;
+
+        const next_dir = current.openDir(io, component, no_follow) catch |err| blk: {
+            if (err != error.FileNotFound) return err;
+            // Component doesn't exist yet: create it, then open it the same
+            // NOFOLLOW way (guards a TOCTOU race where something other than
+            // a plain directory appears between the two calls).
+            try current.createDir(io, component, .default_dir);
+            break :blk try current.openDir(io, component, no_follow);
+        };
+
+        if (owns_current) current.close(io);
+        current = next_dir;
+        owns_current = true;
+    }
+
+    // Degenerate case (empty/"."-only data_dir): fall back to opening "."
+    // explicitly so the returned handle is always a real, closeable fd —
+    // never the bare `cwd()` sentinel (AT_FDCWD on POSIX), which must not
+    // be passed to `Dir.close`.
+    if (!owns_current) {
+        current = try std.Io.Dir.cwd().openDir(io, ".", no_follow);
+        owns_current = true;
+    }
+
+    return current;
 }
 
 /// Gorilla-inspired compression for time-series data.
@@ -467,6 +542,12 @@ pub const ChunkStorage = struct {
     /// Running append offset into chunk_meta.dat (avoids an fstat/seek per append).
     meta_offset: u64,
     data_dir: []const u8,
+    /// Symlink-safe handle on `data_dir` itself, resolved component-by-
+    /// component by `openDataDirNoFollow` (NEW-4). All persistence files
+    /// are opened RELATIVE to this handle by bare filename, so no
+    /// directory-component symlink (in `data_dir`'s leaf or any ancestor)
+    /// can redirect them elsewhere. Held open and closed in `deinit`.
+    dir: std.Io.Dir,
 
     pub const InitError = error{InvalidPath};
 
@@ -475,42 +556,46 @@ pub const ChunkStorage = struct {
         if (std.mem.indexOf(u8, data_dir, "..") != null) return error.InvalidPath;
 
         const io = gio();
-        // Ensure the data directory exists.
-        std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
 
-        // Own the data_dir string first: it's the only non-optional owned
-        // field and doesn't depend on either file handle, so constructing
-        // `self` here (with both file fields null) gives errdefer a single,
-        // always-safe point to take ownership from — zero leak windows for
-        // the fds below, and no double-close since deinit() is the only
-        // closer on every error path.
-        const dir = try allocator.dupe(u8, data_dir);
+        var self: ChunkStorage = undefined;
+        {
+            // NEW-4: resolve data_dir into a symlink-safe Dir handle before
+            // anything else. A single `createDirPath` + concatenated-path
+            // open (the prior NEW-3 fix) only guards the leaf filename —
+            // see `openDataDirNoFollow`'s doc comment for why a component-
+            // wise walk is required to also close the directory-component
+            // escape.
+            var resolved_dir = try openDataDirNoFollow(io, data_dir);
+            errdefer resolved_dir.close(io);
 
-        var self = ChunkStorage{
-            .allocator = allocator,
-            .config = config,
-            .chunks = .empty,
-            .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
-            .data_file = null,
-            .data_offset = 0,
-            .meta_file = null,
-            .meta_offset = 0,
-            .data_dir = dir,
-        };
+            // Own the data_dir string too: constructing `self` here (with
+            // both file fields null) gives errdefer a single, always-safe
+            // point to take ownership from — zero leak windows for the fds
+            // below, and no double-close since deinit() is the only closer
+            // on every error path from here on.
+            const dir_str = try allocator.dupe(u8, data_dir);
+
+            self = ChunkStorage{
+                .allocator = allocator,
+                .config = config,
+                .chunks = .empty,
+                .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
+                .data_file = null,
+                .data_offset = 0,
+                .meta_file = null,
+                .meta_offset = 0,
+                .data_dir = dir_str,
+                .dir = resolved_dir,
+            };
+        }
         errdefer self.deinit();
 
-        const chunks_path = try std.fmt.allocPrint(allocator, "{s}/chunks.dat", .{data_dir});
-        defer allocator.free(chunks_path);
-
-        self.data_file = try openOrCreateNoFollow(io, chunks_path);
+        self.data_file = try openOrCreateNoFollow(io, self.dir, "chunks.dat");
 
         // Determine current file length so new writes append after existing data.
         self.data_offset = (self.data_file.?).length(io) catch 0;
 
-        const meta_path = try std.fmt.allocPrint(allocator, "{s}/chunk_meta.dat", .{data_dir});
-        defer allocator.free(meta_path);
-
-        self.meta_file = try openOrCreateNoFollow(io, meta_path);
+        self.meta_file = try openOrCreateNoFollow(io, self.dir, "chunk_meta.dat");
 
         self.meta_offset = (self.meta_file.?).length(io) catch 0;
 
@@ -534,6 +619,7 @@ pub const ChunkStorage = struct {
         if (self.meta_file) |file| {
             file.close(gio());
         }
+        self.dir.close(gio());
         self.allocator.free(self.data_dir);
     }
 
@@ -1341,4 +1427,171 @@ test "chunk_storage: init does not follow a symlinked chunk_meta.dat (NEW-3)" {
     var read_buf: [64]u8 = undefined;
     const n = try victim.readPositionalAll(io, &read_buf, 0);
     try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
+}
+
+test "chunk_storage: init does not follow a symlinked data_dir leaf directory (NEW-4 PoC1)" {
+    // POSIX-only: relies on O_NOFOLLOW semantics for symlinked directories.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var victim_buf: [128]u8 = undefined;
+    const victim_dir = std.fmt.bufPrint(&victim_buf, "/tmp/ts_test_new4_poc1_victim_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, victim_dir) catch {};
+
+    var data_dir_buf: [128]u8 = undefined;
+    const data_dir = std.fmt.bufPrint(&data_dir_buf, "/tmp/ts_test_new4_poc1_link_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteFile(io, data_dir) catch {};
+
+    // Plant a real victim directory *outside* the would-be data_dir, with a
+    // marker file inside it, then make `data_dir` itself a symlink pointing
+    // at the victim — simulating an attacker who controls a low-entropy,
+    // /tmp-based data_dir path (its own leaf component) before
+    // ChunkStorage.init ever runs.
+    try std.Io.Dir.cwd().createDirPath(io, victim_dir);
+    var marker_path_buf: [160]u8 = undefined;
+    const marker_path = std.fmt.bufPrint(&marker_path_buf, "{s}/marker.txt", .{victim_dir}) catch unreachable;
+    {
+        const marker = try std.Io.Dir.cwd().createFile(io, marker_path, .{ .read = true, .truncate = true });
+        defer marker.close(io);
+        try marker.writePositionalAll(io, "MARKER", 0);
+    }
+
+    try std.Io.Dir.symLinkAbsolute(io, victim_dir, data_dir, .{ .is_directory = true });
+
+    // init must fail closed (not silently follow the symlinked data_dir and
+    // write chunks.dat/chunk_meta.dat through to the victim directory) —
+    // and must not leak the ChunkStorage's internal allocations on this
+    // error path.
+    const result = ChunkStorage.init(ally, data_dir, .{});
+    try std.testing.expect(std.meta.isError(result));
+
+    // The victim directory must not have gained either persistence file.
+    var chunks_victim_buf: [192]u8 = undefined;
+    const chunks_in_victim = std.fmt.bufPrint(&chunks_victim_buf, "{s}/chunks.dat", .{victim_dir}) catch unreachable;
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, chunks_in_victim, .{}));
+
+    var meta_victim_buf: [192]u8 = undefined;
+    const meta_in_victim = std.fmt.bufPrint(&meta_victim_buf, "{s}/chunk_meta.dat", .{victim_dir}) catch unreachable;
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, meta_in_victim, .{}));
+
+    // The marker file's content must be completely unchanged.
+    const marker = try std.Io.Dir.cwd().openFile(io, marker_path, .{});
+    defer marker.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try marker.readPositionalAll(io, &read_buf, 0);
+    try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
+}
+
+test "chunk_storage: init does not follow a symlinked ancestor directory component (NEW-4 PoC2)" {
+    // POSIX-only: relies on O_NOFOLLOW semantics for symlinked directories.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var victim_buf: [128]u8 = undefined;
+    const victim_dir = std.fmt.bufPrint(&victim_buf, "/tmp/ts_test_new4_poc2_victim_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, victim_dir) catch {};
+
+    var attacker_link_buf: [128]u8 = undefined;
+    const attacker_link = std.fmt.bufPrint(&attacker_link_buf, "/tmp/ts_test_new4_poc2_attacker_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteFile(io, attacker_link) catch {};
+
+    // Plant a real victim directory with a marker file inside it, then make
+    // an ANCESTOR path component of `data_dir` (not the leaf) a symlink
+    // pointing at the victim. `data_dir` = "<attacker_link>/sub" — the
+    // ancestor "attacker_link" component is the symlink; "sub" itself never
+    // exists anywhere real.
+    try std.Io.Dir.cwd().createDirPath(io, victim_dir);
+    var marker_path_buf: [160]u8 = undefined;
+    const marker_path = std.fmt.bufPrint(&marker_path_buf, "{s}/marker.txt", .{victim_dir}) catch unreachable;
+    {
+        const marker = try std.Io.Dir.cwd().createFile(io, marker_path, .{ .read = true, .truncate = true });
+        defer marker.close(io);
+        try marker.writePositionalAll(io, "MARKER", 0);
+    }
+
+    try std.Io.Dir.symLinkAbsolute(io, victim_dir, attacker_link, .{ .is_directory = true });
+
+    var data_dir_buf: [160]u8 = undefined;
+    const data_dir = std.fmt.bufPrint(&data_dir_buf, "{s}/sub", .{attacker_link}) catch unreachable;
+
+    // init must fail closed — the component walk must reject the
+    // symlinked ancestor before ever reaching "sub", so no persistence
+    // files (nor a "sub" subdirectory) should appear anywhere under the
+    // victim directory.
+    const result = ChunkStorage.init(ally, data_dir, .{});
+    try std.testing.expect(std.meta.isError(result));
+
+    var sub_victim_buf: [192]u8 = undefined;
+    const sub_in_victim = std.fmt.bufPrint(&sub_victim_buf, "{s}/sub", .{victim_dir}) catch unreachable;
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, sub_in_victim, .{}));
+
+    var chunks_victim_buf: [192]u8 = undefined;
+    const chunks_in_victim = std.fmt.bufPrint(&chunks_victim_buf, "{s}/chunks.dat", .{victim_dir}) catch unreachable;
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(io, chunks_in_victim, .{}));
+
+    // The marker file's content must be completely unchanged.
+    const marker = try std.Io.Dir.cwd().openFile(io, marker_path, .{});
+    defer marker.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try marker.readPositionalAll(io, &read_buf, 0);
+    try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
+}
+
+test "chunk_storage: init creates nested missing directory components and round-trips across restart (NEW-4 regression)" {
+    // Exercises the multi-component walk in openDataDirNoFollow (nested
+    // makeDir) end-to-end, with NO symlinks involved: `data_dir` has two
+    // levels that do not exist yet ("<root>/nested/sub"), matching how
+    // Store.initWithConfig always appends "/timeseries" onto the caller's
+    // data_dir. Also verifies that a second `init` against the
+    // already-created directory (the process-restart case) still succeeds
+    // and finds the previously written data.
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var root_buf: [96]u8 = undefined;
+    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_new4_nested_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+    var data_dir_buf: [128]u8 = undefined;
+    const data_dir = std.fmt.bufPrint(&data_dir_buf, "{s}/nested/sub", .{root_dir}) catch unreachable;
+
+    var points: std.ArrayList(store.Point) = .empty;
+    defer points.deinit(ally);
+    var i: i64 = 0;
+    while (i < 10) : (i += 1) {
+        try points.append(ally, .{ .ts = 1000 + i * 1000, .value = 10 + i });
+    }
+
+    {
+        var storage = try ChunkStorage.init(ally, data_dir, .{});
+        defer storage.deinit();
+
+        try std.testing.expect(storage.data_file != null);
+        try std.testing.expect(storage.meta_file != null);
+
+        try storage.writePoints(7, points.items);
+    }
+
+    // Re-init against the now-existing (real, non-symlinked) nested
+    // directory must succeed and must still see the persisted data.
+    {
+        var storage = try ChunkStorage.init(ally, data_dir, .{});
+        defer storage.deinit();
+
+        const result = try storage.queryRange(7, 1000, 100000, ally);
+        defer ally.free(result);
+
+        try std.testing.expectEqual(@as(usize, 10), result.len);
+        for (0..10) |j| {
+            try std.testing.expectEqual(points.items[j].ts, result[j].ts);
+            try std.testing.expectEqual(points.items[j].value, result[j].value);
+        }
+    }
 }
