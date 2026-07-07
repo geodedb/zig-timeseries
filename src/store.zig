@@ -91,6 +91,11 @@ pub const BucketAvgRow = struct { ts: i64, avg: ?i64 };
 /// Max length of a persisted metric name (corruption/DoS guard).
 const MAX_METRIC_LEN: u32 = 4096;
 
+/// Upper bound on the number of buckets sampleBy/timeBucketAvg will
+/// allocate for a single query (overflow/DoS guard on caller-supplied
+/// time ranges).
+const MAX_BUCKETS: u64 = 1 << 26;
+
 pub const StoreConfig = struct {
     data_dir: ?[]const u8 = null,
     chunk_config: chunk_storage.ChunkConfig = .{},
@@ -316,7 +321,18 @@ pub const Store = struct {
             observability.endTimeseriesSpan(__obs_span, true, 0);
             return &.{};
         };
-        const n_buckets: usize = @intCast(@divTrunc((end_ts - start_ts) + interval_ms - 1, interval_ms));
+        const span = std.math.sub(i64, end_ts, start_ts) catch {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        };
+        const span_u: u64 = @intCast(span);
+        const interval_u: u64 = @intCast(interval_ms);
+        const n_buckets_u: u64 = @divTrunc(span_u + interval_u - 1, interval_u);
+        if (n_buckets_u > MAX_BUCKETS) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
+        const n_buckets: usize = @intCast(n_buckets_u);
 
         var buckets = try allocator.alloc(struct {
             start_ts: i64,
@@ -409,7 +425,18 @@ pub const Store = struct {
             observability.endTimeseriesSpan(__obs_span, true, 0);
             return &.{};
         };
-        const n_buckets: usize = @intCast(@divTrunc((t1 - t0) + bucket_seconds - 1, bucket_seconds));
+        const span = std.math.sub(i64, t1, t0) catch {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        };
+        const span_u: u64 = @intCast(span);
+        const bucket_seconds_u: u64 = @intCast(bucket_seconds);
+        const n_buckets_u: u64 = @divTrunc(span_u + bucket_seconds_u - 1, bucket_seconds_u);
+        if (n_buckets_u > MAX_BUCKETS) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
+        const n_buckets: usize = @intCast(n_buckets_u);
         var buckets = try allocator.alloc(Bucket, n_buckets);
         defer allocator.free(buckets);
 
@@ -792,6 +819,43 @@ test "store: sampleBy aggregations" {
     defer allocator.free(count_result);
     try std.testing.expect(count_result[0].value.? == 3);
     try std.testing.expect(count_result[1].value.? == 2);
+}
+
+test "store: sampleBy overflow-safe span (F7)" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "overflow" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    const result = try st.sampleBy(
+        key,
+        1,
+        std.math.minInt(i64),
+        std.math.maxInt(i64),
+        .avg,
+        allocator,
+    );
+    defer allocator.free(result);
+    try std.testing.expect(result.len == 0);
+}
+
+test "store: timeBucketAvg overflow-safe span (F7)" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "overflow" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    const result = try st.timeBucketAvg(
+        key,
+        1,
+        std.math.minInt(i64),
+        std.math.maxInt(i64),
+        allocator,
+    );
+    defer allocator.free(result);
+    try std.testing.expect(result.len == 0);
 }
 
 test "store: valueAt and lastValue" {
