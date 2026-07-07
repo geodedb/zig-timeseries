@@ -420,6 +420,11 @@ pub const ChunkStorage = struct {
     index: std.AutoHashMap(u64, std.ArrayList(usize)),
     data_file: ?std.Io.File,
     data_offset: u64,
+    /// Held open across the storage's lifetime so appendChunkMeta doesn't
+    /// have to open/write/close chunk_meta.dat on every writePoints call.
+    meta_file: ?std.Io.File,
+    /// Running append offset into chunk_meta.dat (avoids an fstat/seek per append).
+    meta_offset: u64,
     data_dir: []const u8,
 
     pub const InitError = error{InvalidPath};
@@ -441,9 +446,23 @@ pub const ChunkStorage = struct {
             .permissions = securePermissions(),
             .resolve_beneath = true,
         });
+        errdefer file.close(io);
 
         // Determine current file length so new writes append after existing data.
         const end_pos = file.length(io) catch 0;
+
+        const meta_path = try std.fmt.allocPrint(allocator, "{s}/chunk_meta.dat", .{data_dir});
+        defer allocator.free(meta_path);
+
+        const meta_file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
+            .read = true,
+            .truncate = false,
+            .permissions = securePermissions(),
+            .resolve_beneath = true,
+        });
+        errdefer meta_file.close(io);
+
+        const meta_end_pos = meta_file.length(io) catch 0;
 
         var self = ChunkStorage{
             .allocator = allocator,
@@ -452,6 +471,8 @@ pub const ChunkStorage = struct {
             .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
             .data_file = file,
             .data_offset = end_pos,
+            .meta_file = meta_file,
+            .meta_offset = meta_end_pos,
             .data_dir = try allocator.dupe(u8, data_dir),
         };
 
@@ -470,6 +491,9 @@ pub const ChunkStorage = struct {
         self.index.deinit();
         self.chunks.deinit(self.allocator);
         if (self.data_file) |file| {
+            file.close(gio());
+        }
+        if (self.meta_file) |file| {
             file.close(gio());
         }
         self.allocator.free(self.data_dir);
@@ -633,40 +657,26 @@ pub const ChunkStorage = struct {
     /// ChunkMeta is fixed-size when serialized: 8+8+8+4+4+4+4+8 = 48 bytes.
     const chunk_meta_size: usize = 48;
 
-    /// Append a single ChunkMeta record to the chunk_meta.dat file.
+    /// Append a single ChunkMeta record to the chunk_meta.dat file, via the
+    /// handle held open for the lifetime of this ChunkStorage.
     fn appendChunkMeta(self: *ChunkStorage, meta: ChunkMeta) !void {
-        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
-        defer self.allocator.free(meta_path);
-
-        const io = gio();
-        const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
-            .read = true,
-            .truncate = false,
-            .permissions = securePermissions(),
-            .resolve_beneath = true,
-        });
-        defer file.close(io);
-
-        const end_pos = file.length(io) catch 0;
+        const file = self.meta_file orelse return;
 
         var buf: [chunk_meta_size]u8 = undefined;
         serializeChunkMeta(&buf, meta);
-        try file.writePositionalAll(io, &buf, end_pos);
+        try file.writePositionalAll(gio(), &buf, self.meta_offset);
+        self.meta_offset += chunk_meta_size;
     }
 
-    /// Load all ChunkMeta records from chunk_meta.dat and rebuild the in-memory index.
+    /// Load all ChunkMeta records from chunk_meta.dat and rebuild the
+    /// in-memory index, using the handle held open for this ChunkStorage.
     fn loadChunkMeta(self: *ChunkStorage) !void {
-        const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/chunk_meta.dat", .{self.data_dir});
-        defer self.allocator.free(meta_path);
-
-        const io = gio();
-        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return; // No metadata yet.
-        defer file.close(io);
+        const file = self.meta_file orelse return;
 
         var read_off: u64 = 0;
         while (true) {
             var buf: [chunk_meta_size]u8 = undefined;
-            const n = file.readPositionalAll(io, &buf, read_off) catch break;
+            const n = file.readPositionalAll(gio(), &buf, read_off) catch break;
             if (n < chunk_meta_size) break;
             read_off += n;
 
