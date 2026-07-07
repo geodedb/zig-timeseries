@@ -204,6 +204,7 @@ pub export fn ts_soft_dtw(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (!std.math.isFinite(gamma)) return -1;
     const a_ptr = a orelse return -1;
     const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
@@ -339,6 +340,7 @@ pub export fn ts_lcss(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (!std.math.isFinite(epsilon)) return -1;
     const a_ptr = a orelse return -1;
     const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
@@ -362,6 +364,7 @@ pub export fn ts_edr(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (!std.math.isFinite(epsilon)) return -1;
     const a_ptr = a orelse return -1;
     const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
@@ -384,6 +387,7 @@ pub export fn ts_erp(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (!std.math.isFinite(gap_value)) return -1;
     const a_ptr = a orelse return -1;
     const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
@@ -409,6 +413,7 @@ pub export fn ts_twed(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (!std.math.isFinite(lambda) or !std.math.isFinite(nu)) return -1;
     const a_ptr = a orelse return -1;
     const b_ptr = b orelse return -1;
     const a_times_ptr = a_times orelse return -1;

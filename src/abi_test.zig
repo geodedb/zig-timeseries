@@ -406,6 +406,88 @@ test "ABI: ts_pelt Inf penalty -> error" {
     try expect(abi.ts_pelt(&values, 10, -std.math.inf(f64), 2, &cps, &cps_len, 10) == -1);
 }
 
+test "ABI: ts_soft_dtw NaN gamma -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_soft_dtw(&a, 5, &a, 5, std.math.nan(f64), &dist) == -1);
+}
+
+test "ABI: ts_soft_dtw Inf gamma -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_soft_dtw(&a, 5, &a, 5, std.math.inf(f64), &dist) == -1);
+    try expect(abi.ts_soft_dtw(&a, 5, &a, 5, -std.math.inf(f64), &dist) == -1);
+}
+
+test "ABI: ts_lcss NaN epsilon -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_lcss(&a, 5, &a, 5, std.math.nan(f64), 2, &dist) == -1);
+}
+
+test "ABI: ts_lcss Inf epsilon -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_lcss(&a, 5, &a, 5, std.math.inf(f64), 2, &dist) == -1);
+    try expect(abi.ts_lcss(&a, 5, &a, 5, -std.math.inf(f64), 2, &dist) == -1);
+}
+
+test "ABI: ts_edr NaN epsilon -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_edr(&a, 5, &a, 5, std.math.nan(f64), &dist) == -1);
+}
+
+test "ABI: ts_edr Inf epsilon -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_edr(&a, 5, &a, 5, std.math.inf(f64), &dist) == -1);
+    try expect(abi.ts_edr(&a, 5, &a, 5, -std.math.inf(f64), &dist) == -1);
+}
+
+test "ABI: ts_erp NaN gap_value -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_erp(&a, 5, &a, 5, std.math.nan(f64), &dist) == -1);
+}
+
+test "ABI: ts_erp Inf gap_value -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_erp(&a, 5, &a, 5, std.math.inf(f64), &dist) == -1);
+    try expect(abi.ts_erp(&a, 5, &a, 5, -std.math.inf(f64), &dist) == -1);
+}
+
+test "ABI: ts_twed NaN lambda -> error" {
+    const v = [_]f64{ 1, 2, 3, 4, 5 };
+    const t = [_]f64{ 0, 1, 2, 3, 4 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, std.math.nan(f64), 0.5, &dist) == -1);
+}
+
+test "ABI: ts_twed Inf lambda -> error" {
+    const v = [_]f64{ 1, 2, 3, 4, 5 };
+    const t = [_]f64{ 0, 1, 2, 3, 4 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, std.math.inf(f64), 0.5, &dist) == -1);
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, -std.math.inf(f64), 0.5, &dist) == -1);
+}
+
+test "ABI: ts_twed NaN nu -> error" {
+    const v = [_]f64{ 1, 2, 3, 4, 5 };
+    const t = [_]f64{ 0, 1, 2, 3, 4 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, 0.5, std.math.nan(f64), &dist) == -1);
+}
+
+test "ABI: ts_twed Inf nu -> error" {
+    const v = [_]f64{ 1, 2, 3, 4, 5 };
+    const t = [_]f64{ 0, 1, 2, 3, 4 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, 0.5, std.math.inf(f64), &dist) == -1);
+    try expect(abi.ts_twed(&v, 5, &t, &v, 5, &t, 0.5, -std.math.inf(f64), &dist) == -1);
+}
+
 // Negative length (S1)
 
 test "ABI: ts_dtw negative length -> error" {
