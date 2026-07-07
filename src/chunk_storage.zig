@@ -26,6 +26,10 @@ pub const CompressionAlgorithm = enum {
     zstd,
 };
 
+/// Upper bounds for values read from on-disk metadata (corruption/DoS guard).
+const MAX_CHUNK_POINTS: u32 = 1 << 26; // 67M points/chunk ceiling
+const MAX_CHUNK_BYTES: u32 = 1 << 30; // 1 GiB compressed/uncompressed ceiling
+
 /// Compressed chunk metadata.
 pub const ChunkMeta = struct {
     series_id: u64,
@@ -657,7 +661,7 @@ pub const ChunkStorage = struct {
             if (n < chunk_meta_size) break;
             read_off += n;
 
-            const meta = deserializeChunkMeta(&buf);
+            const meta = try deserializeChunkMeta(&buf);
             const chunk_idx = self.chunks.items.len;
             try self.chunks.append(self.allocator, meta);
 
@@ -688,7 +692,7 @@ pub const ChunkStorage = struct {
         std.mem.writeInt(u64, buf[off..][0..8], m.page_offset, .little);
     }
 
-    fn deserializeChunkMeta(buf: *const [chunk_meta_size]u8) ChunkMeta {
+    fn deserializeChunkMeta(buf: *const [chunk_meta_size]u8) error{CorruptMeta}!ChunkMeta {
         var off: usize = 0;
         const series_id = std.mem.readInt(u64, buf[off..][0..8], .little);
         off += 8;
@@ -706,6 +710,12 @@ pub const ChunkStorage = struct {
         off += 4;
         const page_offset = std.mem.readInt(u64, buf[off..][0..8], .little);
 
+        if (compression_raw >= @typeInfo(CompressionAlgorithm).@"enum".fields.len) return error.CorruptMeta;
+        const compression: CompressionAlgorithm = @enumFromInt(compression_raw);
+
+        if (num_points > MAX_CHUNK_POINTS) return error.CorruptMeta;
+        if (compressed_size > MAX_CHUNK_BYTES or uncompressed_size > MAX_CHUNK_BYTES) return error.CorruptMeta;
+
         return .{
             .series_id = series_id,
             .start_ts = start_ts,
@@ -713,7 +723,7 @@ pub const ChunkStorage = struct {
             .num_points = num_points,
             .compressed_size = compressed_size,
             .uncompressed_size = uncompressed_size,
-            .compression = @enumFromInt(compression_raw),
+            .compression = compression,
             .page_offset = page_offset,
         };
     }
@@ -1001,6 +1011,52 @@ test "gorilla: malformed new leading/trailing widths rejected" {
     var decoder = GorillaDecoder.init(&buf, 2);
     const result = decoder.decodeAll(ally);
     try std.testing.expectError(error.CorruptChunk, result);
+}
+
+test "chunk_storage: deserializeChunkMeta rejects invalid compression tag" {
+    var buf: [ChunkStorage.chunk_meta_size]u8 = undefined;
+    var off: usize = 0;
+    std.mem.writeInt(u64, buf[off..][0..8], 1, .little); // series_id
+    off += 8;
+    std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // start_ts
+    off += 8;
+    std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // end_ts
+    off += 8;
+    std.mem.writeInt(u32, buf[off..][0..4], 1, .little); // num_points
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // compressed_size
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // uncompressed_size
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], 99, .little); // compression (invalid)
+    off += 4;
+    std.mem.writeInt(u64, buf[off..][0..8], 0, .little); // page_offset
+
+    const result = ChunkStorage.deserializeChunkMeta(&buf);
+    try std.testing.expectError(error.CorruptMeta, result);
+}
+
+test "chunk_storage: deserializeChunkMeta rejects oversized num_points" {
+    var buf: [ChunkStorage.chunk_meta_size]u8 = undefined;
+    var off: usize = 0;
+    std.mem.writeInt(u64, buf[off..][0..8], 1, .little); // series_id
+    off += 8;
+    std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // start_ts
+    off += 8;
+    std.mem.writeInt(i64, buf[off..][0..8], 0, .little); // end_ts
+    off += 8;
+    std.mem.writeInt(u32, buf[off..][0..4], 0xFFFFFFFF, .little); // num_points (bogus)
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // compressed_size
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], 0, .little); // uncompressed_size
+    off += 4;
+    std.mem.writeInt(u32, buf[off..][0..4], @intFromEnum(CompressionAlgorithm.gorilla), .little); // compression (valid)
+    off += 4;
+    std.mem.writeInt(u64, buf[off..][0..8], 0, .little); // page_offset
+
+    const result = ChunkStorage.deserializeChunkMeta(&buf);
+    try std.testing.expectError(error.CorruptMeta, result);
 }
 
 test "chunk_storage: path traversal with .. rejected" {
