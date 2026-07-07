@@ -26,6 +26,9 @@ include:
 
 variables:
   ZIG_VERSION: "0.16.0"
+  # Redirect Zig's global package cache (normally ~/.cache/zig) into the
+  # project directory so the cache: block below can persist it across jobs.
+  ZIG_GLOBAL_CACHE_DIR: "${CI_PROJECT_DIR}/.cache/zig"
 
 stages:
   - lint
@@ -35,6 +38,17 @@ stages:
   - security
   - sbom
   - release
+
+# Cache the extracted Zig toolchain and Zig's global package cache
+# (thread_pool/otel deps) across all jobs. Keyed on build.zig.zon so a
+# dependency/version bump invalidates it automatically.
+cache:
+  key:
+    files:
+      - build.zig.zon
+  paths:
+    - zig-${ZIG_VERSION}/
+    - .cache/zig/
 
 # Zig installation template (SEC-R6-02: SHA-256 verified via ziglang.org index)
 .install-zig: &install-zig
@@ -92,80 +106,41 @@ build:
   script:
     - zig build check
 
-# Unit tests
+# Shared template for the optimize-mode test matrix below. Reproduces the
+# exact commands the former per-mode jobs ran: the Debug entry omits
+# -Doptimize= entirely (matching Zig's default), other modes pass it explicitly.
+.test-matrix:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - *install-zig
+  script:
+    - |
+      if [ "$ZIG_OPTIMIZE" = "Debug" ]; then
+        zig build "$ZIG_BUILD_TARGET" --summary all
+      else
+        zig build "$ZIG_BUILD_TARGET" -Doptimize="$ZIG_OPTIMIZE" --summary all
+      fi
+  needs:
+    - build
+
+# Unit tests across all optimize modes (was: test, test-release-safe,
+# test-release-fast, test-release-small).
 test:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test --summary all
-  needs:
-    - build
+  extends: .test-matrix
+  parallel:
+    matrix:
+      - ZIG_BUILD_TARGET: test
+        ZIG_OPTIMIZE: [Debug, ReleaseSafe, ReleaseFast, ReleaseSmall]
 
-# Integration tests
+# Integration tests across optimize modes (was: test-integration,
+# test-integration-release-safe, test-integration-release-fast).
 test-integration:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test-integration --summary all
-  needs:
-    - build
-
-# Release optimization tests
-test-release-safe:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test -Doptimize=ReleaseSafe --summary all
-  needs:
-    - build
-
-# ReleaseFast tests
-test-release-fast:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test -Doptimize=ReleaseFast --summary all
-  needs:
-    - build
-
-test-integration-release-safe:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test-integration -Doptimize=ReleaseSafe --summary all
-  needs:
-    - build
-
-test-integration-release-fast:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test-integration -Doptimize=ReleaseFast --summary all
-  needs:
-    - build
-
-# ReleaseSmall tests
-test-release-small:
-  stage: test
-  image: debian:bookworm-slim
-  before_script:
-    - *install-zig
-  script:
-    - zig build test -Doptimize=ReleaseSmall --summary all
-  needs:
-    - build
+  extends: .test-matrix
+  parallel:
+    matrix:
+      - ZIG_BUILD_TARGET: test-integration
+        ZIG_OPTIMIZE: [Debug, ReleaseSafe, ReleaseFast]
 
 # Coverage-guided fuzz testing.
 # Runs with a 60-second timeout so the job always terminates.
