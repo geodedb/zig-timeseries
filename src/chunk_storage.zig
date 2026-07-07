@@ -13,7 +13,7 @@ inline fn gio() std.Io {
 }
 
 /// Restrictive file permissions for persisted data (POSIX 0o600; default elsewhere).
-fn securePermissions() std.Io.File.Permissions {
+pub fn securePermissions() std.Io.File.Permissions {
     return if (@import("builtin").os.tag == .windows) .default_file else @enumFromInt(0o600);
 }
 
