@@ -249,3 +249,73 @@ test "parallelMpDistAbJoin: rejects oversized series" {
     const result = parallel.parallelMpDistAbJoin(allocator, null, a, b, 16, .{});
     try std.testing.expectError(ts.TsError.SeriesTooLong, result);
 }
+
+// F9: mismatched out/candidates slice lengths return error.LengthMismatch
+// instead of asserting (which compiles out in ReleaseFast, leaving a
+// silent out-of-bounds write).
+
+test "parallelBatchDTW: mismatched out_results length -> error.LengthMismatch" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const query = [_]f64{ 1, 2, 3 };
+    const cand_buf = [_]f64{ 1, 2, 3 };
+    var candidates: [2][]const f64 = .{ &cand_buf, &cand_buf };
+
+    var results: [1]parallel.BatchResult(ts.DtwResult) = undefined;
+    const result = parallel.parallelBatchDTW(
+        allocator,
+        null,
+        &query,
+        candidates[0..],
+        &results,
+        .{},
+        .{},
+    );
+    try std.testing.expectError(error.LengthMismatch, result);
+}
+
+test "parallelBatchLbKeogh: mismatched out_distances length -> error.LengthMismatch" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const query = [_]f64{ 1, 2, 3 };
+    const cand_buf = [_]f64{ 1, 2, 3 };
+    var candidates: [2][]const f64 = .{ &cand_buf, &cand_buf };
+
+    var out_distances: [1]f64 = undefined;
+    const result = parallel.parallelBatchLbKeogh(
+        allocator,
+        null,
+        &query,
+        candidates[0..],
+        &out_distances,
+        0,
+        .{},
+    );
+    try std.testing.expectError(error.LengthMismatch, result);
+}
+
+test "parallelBatchDistances: mismatched out_results length -> error.LengthMismatch" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const query = [_]f64{ 1, 2, 3 };
+    const cand_buf = [_]f64{ 1, 2, 3 };
+    var candidates: [2][]const f64 = .{ &cand_buf, &cand_buf };
+
+    var results: [1]parallel.BatchResult(f64) = undefined;
+    const result = parallel.parallelBatchDistances(
+        allocator,
+        null,
+        &query,
+        candidates[0..],
+        &results,
+        .{},
+        .{},
+    );
+    try std.testing.expectError(error.LengthMismatch, result);
+}

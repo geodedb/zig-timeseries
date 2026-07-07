@@ -124,7 +124,7 @@ pub fn parallelBatchDTW(
     options: DtwOptions,
     batch_options: BatchOptions,
 ) !usize {
-    std.debug.assert(out_results.len == candidates.len);
+    if (out_results.len != candidates.len) return error.LengthMismatch;
     if (candidates.len == 0) return 0;
 
     if (pool == null or candidates.len == 1) {
@@ -243,7 +243,7 @@ pub fn parallelBatchLbKeogh(
     band: usize,
     batch_options: BatchOptions,
 ) !void {
-    std.debug.assert(out_distances.len == candidates.len);
+    if (out_distances.len != candidates.len) return error.LengthMismatch;
     if (candidates.len == 0) return;
 
     if (pool == null or candidates.len == 1) {
@@ -321,7 +321,7 @@ pub fn parallelBatchDistances(
     options: DistanceOptions,
     batch_options: BatchOptions,
 ) !usize {
-    std.debug.assert(out_results.len == candidates.len);
+    if (out_results.len != candidates.len) return error.LengthMismatch;
     if (candidates.len == 0) return 0;
 
     if (pool == null or candidates.len == 1) {
