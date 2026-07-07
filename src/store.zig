@@ -572,6 +572,13 @@ pub const Store = struct {
     /// Persist series key metadata (device_id, metric) to a file so that
     /// loadFromDisk can reconstruct SeriesKey from a chunk series_id.
     fn saveSeriesKeyMeta(self: *Store, key: SeriesKey, chunk_id: u64) !void {
+        // SEC-3: the load path hard-rejects metric_len > MAX_METRIC_LEN with
+        // error.CorruptMeta. Reject over-long metric names here, at the
+        // write boundary, so one can never be persisted in the first place
+        // — otherwise a >4KiB metric name would brick loadFromDisk (and
+        // thus the whole store) on the next restart.
+        if (key.metric.len > @as(usize, MAX_METRIC_LEN)) return error.MetricNameTooLong;
+
         const cs = self.chunk_store orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
 
@@ -1216,6 +1223,36 @@ test "store: loadAllSeriesKeyMeta does not follow a symlinked series_meta.dat (S
     // loadFromDisk (the real public entrypoint) must also not crash and
     // must degrade gracefully.
     try st2.loadFromDisk();
+}
+
+test "store: insertMany rejects metric names over MAX_METRIC_LEN at the write boundary (SEC-3)" {
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_long_metric_write_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var st = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+    defer st.deinit();
+
+    const long_metric = try allocator.alloc(u8, MAX_METRIC_LEN + 1);
+    defer allocator.free(long_metric);
+    @memset(long_metric, 'a');
+
+    const key = SeriesKey{ .device_id = 1, .metric = long_metric };
+    const result = st.insertMany(key, &.{.{ .ts = 1000, .value = 1 }});
+    try std.testing.expectError(error.MetricNameTooLong, result);
+
+    // Nothing should have been persisted: series_meta.dat must not exist
+    // (saveSeriesKeyMeta must reject before creating/appending to it).
+    const cs = st.chunk_store.?;
+    const meta_path = try std.fmt.allocPrint(allocator, "{s}/series_meta.dat", .{cs.data_dir});
+    defer allocator.free(meta_path);
+
+    const open_result = std.Io.Dir.cwd().openFile(io, meta_path, .{});
+    try std.testing.expectError(error.FileNotFound, open_result);
 }
 
 test "store: loadFromDisk rejects oversized metric_len in series_meta.dat" {
