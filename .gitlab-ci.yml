@@ -52,9 +52,15 @@ stages:
   - sbom
   - release
 
-# Cache the extracted Zig toolchain and Zig's global package cache
-# (thread_pool/otel deps) across all jobs. Keyed on build.zig.zon so a
-# dependency/version bump invalidates it automatically.
+# Cache the extracted Zig toolchain, its retained hash-verified download
+# archive, and Zig's global package cache (thread_pool/otel deps) across
+# all jobs. Keyed on build.zig.zon so a dependency/version bump
+# invalidates it automatically.
+#
+# SEC-4: the cache key is not ref-scoped (see the drift-detection note
+# below), so a warm cache MUST NOT be trusted without re-verification --
+# see the SHA-256 check in .install-zig, which runs unconditionally on
+# every job, not just on a cold-cache miss.
 cache:
   key:
     files:
@@ -62,31 +68,61 @@ cache:
   paths:
     - zig-${ZIG_VERSION}/
     - .cache/zig/
+    - .cache/zig-dl/
 
-# Zig installation template (SEC-R6-02: SHA-256 verified via ziglang.org index)
+# Zig installation template (SEC-R6-02 / SEC-4: SHA-256 verified via the
+# ziglang.org index on every job -- cold cache AND warm cache).
+#
+# SEC-4 (2026-07-07): a prior version of this template only verified the
+# SHA-256 inside the `if [ ! -f "zig-${ZIG_VERSION}/zig" ]` guard, so a
+# warm-cache run trusted the cached `zig-${ZIG_VERSION}/` directory
+# without ever re-checking it. Because the `cache: key:` above is scoped
+# only to `build.zig.zon`'s hash (not to `$CI_COMMIT_REF_NAME` or
+# protection status), a pipeline on any branch can populate/observe the
+# same cache entry -- so a warm cache is not an equivalent trust
+# boundary to "downloaded and verified just now" and must not be treated
+# as one.
+#
+# Fix: the retained artifact across cache hits is now the downloaded
+# `.tar.xz` archive itself (kept in `.cache/zig-dl/`, not the extracted
+# toolchain). The expected SHA-256 is re-fetched from
+# `ziglang.org/download/index.json` on every single job (cheap: one
+# small JSON file), and the cached archive is verified against it with
+# `sha256sum --check --strict` unconditionally -- a cache hit only saves
+# the network download, never the verification. The `zig-${ZIG_VERSION}/`
+# toolchain directory is then unconditionally re-extracted from that
+# just-verified archive on every job, so a tampered/corrupted extracted
+# binary can never be used without also matching the hash-verified
+# archive contents.
 .install-zig: &install-zig
   - apt-get update && apt-get install -y curl xz-utils python3
   - |
-    if [ ! -f "zig-${ZIG_VERSION}/zig" ]; then
-      ARCH=$(uname -m)
-      case "$ARCH" in
-        x86_64)  ZIG_ARCH="x86_64" ;;
-        aarch64) ZIG_ARCH="aarch64" ;;
-        arm64)   ZIG_ARCH="aarch64" ;;
-        *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
-      esac
-      MAJOR=$(echo "$ZIG_VERSION" | cut -d. -f1)
-      MINOR=$(echo "$ZIG_VERSION" | cut -d. -f2)
-      if [ "$MAJOR" -eq 0 ] && [ "$MINOR" -lt 15 ]; then
-        ARCHIVE_NAME="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}"
-      else
-        ARCHIVE_NAME="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
-      fi
-      TARBALL="${ARCHIVE_NAME}.tar.xz"
-      INDEX_FILE=$(mktemp)
-      curl -fsSL "https://ziglang.org/download/index.json" -o "${INDEX_FILE}"
-      EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-linux" ZIG_IDX="${INDEX_FILE}" \
-        python3 -c "
+    set -e
+    ARCH=$(uname -m)
+    case "$ARCH" in
+      x86_64)  ZIG_ARCH="x86_64" ;;
+      aarch64) ZIG_ARCH="aarch64" ;;
+      arm64)   ZIG_ARCH="aarch64" ;;
+      *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
+    esac
+    MAJOR=$(echo "$ZIG_VERSION" | cut -d. -f1)
+    MINOR=$(echo "$ZIG_VERSION" | cut -d. -f2)
+    if [ "$MAJOR" -eq 0 ] && [ "$MINOR" -lt 15 ]; then
+      ARCHIVE_NAME="zig-linux-${ZIG_ARCH}-${ZIG_VERSION}"
+    else
+      ARCHIVE_NAME="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
+    fi
+    TARBALL="${ARCHIVE_NAME}.tar.xz"
+    DL_DIR=".cache/zig-dl"
+    CACHED_TARBALL="${DL_DIR}/${TARBALL}"
+    mkdir -p "${DL_DIR}"
+
+    # Always re-fetch the index so EXPECTED_HASH is authoritative and
+    # independent of anything sitting in the cache.
+    INDEX_FILE=$(mktemp)
+    curl -fsSL "https://ziglang.org/download/index.json" -o "${INDEX_FILE}"
+    EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-linux" ZIG_IDX="${INDEX_FILE}" \
+      python3 -c "
     import json, os, sys
     idx = json.load(open(os.environ['ZIG_IDX']))
     pkg = idx.get(os.environ['ZIG_VER'], {}).get(os.environ['ZIG_ARCH_KEY'], {})
@@ -94,13 +130,28 @@ cache:
     if not h: sys.exit('SHA-256 not found for ' + os.environ['ZIG_VER'] + '/' + os.environ['ZIG_ARCH_KEY'])
     print(h)
     ")
-      rm -f "${INDEX_FILE}"
-      curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" -o "${TARBALL}"
-      echo "${EXPECTED_HASH}  ${TARBALL}" | sha256sum --check --strict
-      tar -xJf "${TARBALL}"
-      mv "${ARCHIVE_NAME}" "zig-${ZIG_VERSION}"
-      rm -f "${TARBALL}"
+    rm -f "${INDEX_FILE}"
+
+    # Download only on a genuine cache miss (missing or already-invalid
+    # cached archive) -- but the verification step below always runs
+    # regardless, so this guard is a speed optimization, not a trust
+    # decision.
+    if [ ! -f "${CACHED_TARBALL}" ] || ! echo "${EXPECTED_HASH}  ${CACHED_TARBALL}" | sha256sum --check --strict --status; then
+      echo "Downloading ${TARBALL} (cache miss or stale/invalid cached archive)..."
+      curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" -o "${CACHED_TARBALL}"
     fi
+
+    # SEC-4: verify unconditionally -- on both cold cache (just
+    # downloaded above) and warm cache (restored from a prior job) --
+    # before the archive is trusted.
+    echo "${EXPECTED_HASH}  ${CACHED_TARBALL}" | sha256sum --check --strict
+
+    # Re-extract unconditionally from the just-verified archive, so a
+    # cached `zig-${ZIG_VERSION}/` directory is never used as-is; its
+    # contents are always regenerated from a binary we just checked.
+    rm -rf "zig-${ZIG_VERSION}" "${ARCHIVE_NAME}"
+    tar -xJf "${CACHED_TARBALL}"
+    mv "${ARCHIVE_NAME}" "zig-${ZIG_VERSION}"
   - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
   - zig version
 
