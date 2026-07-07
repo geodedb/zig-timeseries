@@ -643,7 +643,13 @@ pub const Store = struct {
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return;
+        // SEC-1: never follow a symlink at this path — a planted symlink
+        // pointing elsewhere could otherwise cause an attacker-controlled
+        // file's bytes to be read and parsed as trusted series metadata.
+        // loadFromDisk already tolerates a missing/failed series_meta.dat
+        // (this whole open is wrapped in `catch return`), so blocking the
+        // symlink here degrades gracefully instead of disclosing data.
+        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{ .follow_symlinks = false }) catch return;
         defer file.close(io);
 
         var pos: u64 = 0;
@@ -695,7 +701,9 @@ pub const Store = struct {
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
-        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{}) catch return null;
+        // SEC-1: same rationale as loadAllSeriesKeyMeta — never follow a
+        // symlink planted at this path.
+        const file = std.Io.Dir.cwd().openFile(io, meta_path, .{ .follow_symlinks = false }) catch return null;
         defer file.close(io);
 
         var pos: u64 = 0;
@@ -1146,6 +1154,68 @@ test "store: init backward compat — in-memory only" {
     const l = st.last(key).?;
     try std.testing.expectEqual(@as(i64, 600), l.ts);
     try std.testing.expect(st.chunk_store == null);
+}
+
+test "store: loadAllSeriesKeyMeta does not follow a symlinked series_meta.dat (SEC-1)" {
+    // POSIX-only: relies on O_NOFOLLOW semantics for symlinks.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_symlink_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    // Create the store directory structure (and a real series_meta.dat)
+    // first, then tear the store down.
+    {
+        var st = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+        defer st.deinit();
+        try st.insertMany(.{ .device_id = 1, .metric = "cpu_temp" }, &.{.{ .ts = 1000, .value = 1 }});
+    }
+
+    var meta_path_buf: [160]u8 = undefined;
+    const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/timeseries/series_meta.dat", .{test_dir}) catch unreachable;
+
+    // Remove the real metadata file and plant a well-formed record
+    // elsewhere, then replace series_meta.dat with a symlink to the
+    // planted file. If the read path followed the symlink, this planted
+    // (attacker-controlled) record would be ingested as if it were
+    // legitimate series metadata — an information-disclosure primitive.
+    try std.Io.Dir.cwd().deleteFile(io, meta_path);
+
+    var planted_path_buf: [160]u8 = undefined;
+    const planted_path = std.fmt.bufPrint(&planted_path_buf, "{s}/planted.dat", .{test_dir}) catch unreachable;
+    {
+        const planted_metric = "pwned";
+        const planted_file = try std.Io.Dir.cwd().createFile(io, planted_path, .{ .read = true, .truncate = true });
+        defer planted_file.close(io);
+
+        var buf: [20]u8 = undefined;
+        std.mem.writeInt(u64, buf[0..8], 0xdeadbeef, .little); // chunk_id
+        std.mem.writeInt(i64, buf[8..16], 1234, .little); // device_id
+        std.mem.writeInt(u32, buf[16..20], @intCast(planted_metric.len), .little); // metric_len
+        try planted_file.writePositionalAll(io, &buf, 0);
+        try planted_file.writePositionalAll(io, planted_metric, 20);
+    }
+
+    try std.Io.Dir.symLinkAbsolute(io, planted_path, meta_path, .{});
+
+    // Re-open the store and attempt to hydrate series-key metadata. The
+    // symlink must not be followed: loadAllSeriesKeyMeta should degrade
+    // gracefully (no crash, no error) and must not ingest the planted
+    // record.
+    var st2 = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+    defer st2.deinit();
+
+    try st2.loadAllSeriesKeyMeta();
+    try std.testing.expectEqual(@as(usize, 0), st2.chunk_id_to_hash.count());
+
+    // loadFromDisk (the real public entrypoint) must also not crash and
+    // must degrade gracefully.
+    try st2.loadFromDisk();
 }
 
 test "store: loadFromDisk rejects oversized metric_len in series_meta.dat" {
