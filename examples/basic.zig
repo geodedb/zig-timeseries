@@ -4,20 +4,30 @@
 //! Basic usage example for the timeseries library.
 //!
 //! This example demonstrates:
-//! - Inserting data into the Store
-//! - Querying with sampleBy aggregation
+//! - Inserting data into the Store and aggregating with sampleBy
 //! - Z-normalizing a series
-//! - Computing invariant statistics
 //! - Extracting feature vectors and computing cosine similarity
+//! - Writing/querying raw points through ChunkStorage (Gorilla compression)
 //!
 //! Build and run:
-//!   zig build-exe examples/basic.zig --mod timeseries::src/root.zig --deps timeseries
-//!   ./basic
+//!   zig build examples
 
 const std = @import("std");
+const ts = @import("timeseries");
+
+/// Helper to obtain a global single-threaded I/O context, mirroring the
+/// `gio()` helper used throughout the library (src/chunk_storage.zig).
+inline fn gio() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
 
 pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
+    const io = gio();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &stdout_buffer);
+    const stdout = &stdout_writer.interface;
+    defer stdout.flush() catch {};
+
     const allocator = std.heap.page_allocator;
 
     try stdout.print("timeseries Library -- Basic Example\n", .{});
@@ -27,61 +37,52 @@ pub fn main() !void {
     try stdout.print("1. Store: insert and aggregate\n", .{});
 
     // The Store manages time-series data keyed by (device_id, metric).
-    // Usage:
-    //   var st = lib.Store.init(allocator);
-    //   defer st.deinit();
-    //   const key = lib.SeriesKey{ .device_id = 1, .metric = "cpu" };
-    //   try st.insertMany(key, &.{
-    //       .{ .ts = 1000, .value = 50 },
-    //       .{ .ts = 2000, .value = 60 },
-    //       .{ .ts = 3000, .value = 55 },
-    //   });
-    //   const rows = try st.sampleBy(key, 2000, 0, 4000, .avg, allocator);
-    //   // rows contains time-bucketed averages
-    try stdout.print("   Store supports insertMany, sampleBy, timeBucketAvg, last, valueBefore\n\n", .{});
+    var st = ts.Store.init(allocator);
+    defer st.deinit();
+
+    const key = ts.SeriesKey{ .device_id = 1, .metric = "cpu" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 50 },
+        .{ .ts = 2000, .value = 60 },
+        .{ .ts = 3000, .value = 55 },
+        .{ .ts = 4000, .value = 70 },
+    });
+
+    const rows = try st.sampleBy(key, 2000, 0, 5000, .avg, allocator);
+    defer allocator.free(rows);
+    for (rows) |row| {
+        if (row.value) |v| {
+            try stdout.print("   bucket start_ts={d} avg={d}\n", .{ row.ts, v });
+        }
+    }
+    try stdout.print("\n", .{});
 
     // -- 2. Preprocessing: z-normalization --
     try stdout.print("2. Preprocessing: z-normalization\n", .{});
 
-    // zNormalize modifies in-place; zNormalizeAlloc returns a new array.
     var values = [_]f64{ 10, 20, 30, 40, 50 };
     const n: f64 = @floatFromInt(values.len);
 
-    // Compute mean before normalization.
     var sum: f64 = 0;
     for (values) |v| sum += v;
     try stdout.print("   Before: mean = {d:.1}\n", .{sum / n});
 
-    // In-place z-normalization.
-    // preprocess.zNormalize(&values) would set mean=0, stddev=1.
-    // Here we demonstrate the math inline:
-    const mean = sum / n;
-    var var_sum: f64 = 0;
-    for (values) |v| {
-        const d = v - mean;
-        var_sum += d * d;
-    }
-    const std_dev = @sqrt(var_sum / n);
-    for (&values) |*v| v.* = (v.* - mean) / std_dev;
+    const normalized = try ts.zNormalizeAlloc(allocator, &values);
+    defer allocator.free(normalized);
 
     var sum2: f64 = 0;
-    for (values) |v| sum2 += v;
+    for (normalized) |v| sum2 += v;
     try stdout.print("   After:  mean = {d:.6}\n\n", .{sum2 / n});
 
     // -- 3. Feature extraction and cosine similarity --
     try stdout.print("3. Feature extraction and cosine similarity\n", .{});
 
-    // extractFeatures produces a 22-element vector:
-    //   [0] length, [1] mean, [2] std, [3] min, [4] max, [5] range,
-    //   [6] median, [7] skewness, [8] kurtosis, [9] first, [10] last,
-    //   [11] slope, [12-21] 10-bin histogram
-    //
-    // Usage:
-    //   var feats: [22]f64 = undefined;
-    //   _ = lib.features.extractFeatures(allocator, &series_a, 5, &feats);
-    //   const sim = lib.features.cosineSimilarity(&feats_a, &feats_b, 22);
+    const feats_a = try ts.features.extractFeatures(allocator, &values);
+    const feats_b = try ts.features.extractFeatures(allocator, normalized);
+    const sim = ts.features.cosineSimilarity(&feats_a, &feats_b);
     try stdout.print("   22 features: length, mean, std, min, max, range, median,\n", .{});
-    try stdout.print("                skewness, kurtosis, first, last, slope, 10-bin histogram\n\n", .{});
+    try stdout.print("                skewness, kurtosis, first, last, slope, 10-bin histogram\n", .{});
+    try stdout.print("   cosine similarity(raw, normalized) = {d:.4}\n\n", .{sim});
 
     // -- 4. Distance algorithms --
     try stdout.print("4. Distance algorithms available:\n", .{});
@@ -101,14 +102,36 @@ pub fn main() !void {
 
     // -- 6. Chunk storage with Gorilla compression --
     try stdout.print("6. Chunk storage with Gorilla compression\n", .{});
-    try stdout.print("   - writePoints: compress and persist time-series chunks\n", .{});
-    try stdout.print("   - queryRange: decompress and filter by time range\n", .{});
-    try stdout.print("   - runRetention: prune expired chunks\n\n", .{});
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const data_dir = try std.fmt.bufPrint(&path_buf, "/tmp/ts_example_basic_{d}", .{pid});
+    defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
+
+    var storage = try ts.ChunkStorage.init(allocator, data_dir, .{});
+    defer storage.deinit();
+
+    const series_id: u64 = 42;
+    try storage.writePoints(series_id, &.{
+        .{ .ts = 1000, .value = 100 },
+        .{ .ts = 2000, .value = 110 },
+        .{ .ts = 3000, .value = 90 },
+    });
+
+    const queried = try storage.queryRange(series_id, 0, 5000, allocator);
+    defer allocator.free(queried);
+    try stdout.print("   writePoints: compressed and persisted {d} points\n", .{3});
+    try stdout.print("   queryRange:  round-tripped {d} points -> [", .{queried.len});
+    for (queried, 0..) |p, i| {
+        if (i != 0) try stdout.print(", ", .{});
+        try stdout.print("({d},{d})", .{ p.ts, p.value });
+    }
+    try stdout.print("]\n", .{});
+    try stdout.print("   runRetention: prune expired chunks\n\n", .{});
 
     // -- 7. C ABI --
     try stdout.print("7. C ABI surface: 18 functions in libai_ts.so/libai_ts.a\n", .{});
     try stdout.print("   Consumable from Go (CGO), Python (ctypes), or any C-compatible FFI.\n\n", .{});
 
-    _ = allocator;
     try stdout.print("Example completed successfully!\n", .{});
 }

@@ -152,6 +152,24 @@ pub fn build(b: *std.Build) void {
     const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
     fuzz_step.dependOn(&run_fuzz_tests.step);
 
+    // Example executable, demonstrating the public API end-to-end. Compiled
+    // (and, via `zig build examples`, run) so CI catches example breakage
+    // the moment the library's public surface changes.
+    const examples_step = b.step("examples", "Build and run examples/basic.zig");
+    const basic_example = b.addExecutable(.{
+        .name = "basic",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/basic.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = allocImports(b, &.{
+                .{ .name = "timeseries", .module = module },
+            }),
+        }),
+    });
+    const run_basic_example = b.addRunArtifact(basic_example);
+    examples_step.dependOn(&run_basic_example.step);
+
     // Benchmark executable (compiled with ReleaseFast for accurate timing).
     const bench_step = b.step("bench", "Run benchmarks");
     const bench_exe = b.addExecutable(.{
@@ -190,6 +208,22 @@ pub fn build(b: *std.Build) void {
         check.root_module.addImport("otel", otel_mod);
     }
     check_step.dependOn(&check.step);
+
+    // Also type-check the example against the `timeseries` module so a
+    // public-API change that breaks examples/basic.zig fails `check` (and
+    // therefore CI) immediately instead of silently rotting.
+    const check_example = b.addExecutable(.{
+        .name = "basic",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/basic.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = allocImports(b, &.{
+                .{ .name = "timeseries", .module = module },
+            }),
+        }),
+    });
+    check_step.dependOn(&check_example.step);
 }
 
 fn loadDeps(
