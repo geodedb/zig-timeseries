@@ -555,19 +555,13 @@ test "ABI: ts_cosine_similarity null result pointer -> error" {
 
 // NULL input data pointer checks (F6)
 //
-// Zig's own `@ptrFromInt`/`@ptrCast` insert a runtime safety check that
-// rejects constructing a zero-valued `[*]const f64` directly (these
-// pointer types don't allow the zero address), so a plain
-// `@ptrFromInt(0)` panics before we ever reach the function under test.
-// A real C caller has no such guard: it can pass a raw NULL through the
-// C calling convention without Zig ever materializing an invalid pointer
-// value. `asRaw` reinterprets the exported function's pointer with one
-// parameter widened to `usize` so the test can hand the callee a literal
-// zero bit pattern exactly the way an FFI caller would -- reproducing the
-// F6 scenario faithfully instead of tripping over Zig's own safety net.
-fn asRaw(comptime RawFn: type, func: anytype) RawFn {
-    return @ptrCast(func);
-}
+// Input data pointers are `?[*]const T` (optional many-pointers), which
+// lower to the same `const T *` in C ABI terms but remain non-elidable
+// null checks in Zig at any optimize level -- unlike a non-optional
+// `[*]const T`, which the optimizer is free to treat as always non-null.
+// This lets the tests pass a plain `null` exactly the way a real C/CGO
+// caller would hand over a NULL pointer, without any unsafe pointer
+// reinterpretation tricks.
 
 test "ABI: ts_dtw null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
@@ -575,9 +569,7 @@ test "ABI: ts_dtw null a pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_dtw);
-    try expect(raw(0, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw(null, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw null b pointer -> error" {
@@ -586,9 +578,7 @@ test "ABI: ts_dtw null b pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn ([*]const f64, c_int, usize, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_dtw);
-    try expect(raw(&a, 3, 0, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw(&a, 3, null, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_derivative null a pointer -> error" {
@@ -597,9 +587,7 @@ test "ABI: ts_dtw_derivative null a pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_dtw_derivative);
-    try expect(raw(0, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_derivative(null, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_open_end null a pointer -> error" {
@@ -608,9 +596,7 @@ test "ABI: ts_dtw_open_end null a pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_dtw_open_end);
-    try expect(raw(0, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_open_end(null, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_shape null a pointer -> error" {
@@ -619,140 +605,106 @@ test "ABI: ts_dtw_shape null a pointer -> error" {
     var pi: [10]i32 = undefined;
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, c_int, ?*f64, ?[*]i32, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_dtw_shape);
-    try expect(raw(0, 3, &b, 3, 0, 3, &dist, &pi, &pj, &plen, 10) == -1);
+    try expect(abi.ts_dtw_shape(null, 3, &b, 3, 0, 3, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_soft_dtw null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_soft_dtw);
-    try expect(raw(0, 3, &b, 3, 1.0, &dist) == -1);
+    try expect(abi.ts_soft_dtw(null, 3, &b, 3, 1.0, &dist) == -1);
 }
 
 test "ABI: ts_lb_keogh null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var result: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_lb_keogh);
-    try expect(raw(0, 3, &b, 3, 1, &result) == -1);
+    try expect(abi.ts_lb_keogh(null, 3, &b, 3, 1, &result) == -1);
 }
 
 test "ABI: ts_cross_correlate null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var lag: c_int = undefined;
     var corr: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, ?*c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_cross_correlate);
-    try expect(raw(0, 3, &b, 3, &lag, &corr) == -1);
+    try expect(abi.ts_cross_correlate(null, 3, &b, 3, &lag, &corr) == -1);
 }
 
 test "ABI: ts_sbd null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_sbd);
-    try expect(raw(0, 3, &b, 3, &dist) == -1);
+    try expect(abi.ts_sbd(null, 3, &b, 3, &dist) == -1);
 }
 
 test "ABI: ts_pelt null values pointer -> error" {
     var cps: [10]i32 = undefined;
     var cps_len: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, f64, c_int, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_pelt);
-    try expect(raw(0, 10, 5.0, 2, &cps, &cps_len, 10) == -1);
+    try expect(abi.ts_pelt(null, 10, 5.0, 2, &cps, &cps_len, 10) == -1);
 }
 
 test "ABI: ts_lcss null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, f64, c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_lcss);
-    try expect(raw(0, 3, &b, 3, 0.5, 2, &dist) == -1);
+    try expect(abi.ts_lcss(null, 3, &b, 3, 0.5, 2, &dist) == -1);
 }
 
 test "ABI: ts_edr null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_edr);
-    try expect(raw(0, 3, &b, 3, 0.5, &dist) == -1);
+    try expect(abi.ts_edr(null, 3, &b, 3, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_erp null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_erp);
-    try expect(raw(0, 3, &b, 3, 0.0, &dist) == -1);
+    try expect(abi.ts_erp(null, 3, &b, 3, 0.0, &dist) == -1);
 }
 
 test "ABI: ts_twed null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, [*]const f64, c_int, [*]const f64, f64, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_twed);
-    try expect(raw(0, 3, &t, &b, 3, &t, 0.5, 0.5, &dist) == -1);
+    try expect(abi.ts_twed(null, 3, &t, &b, 3, &t, 0.5, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_twed null b pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
     var dist: f64 = undefined;
-    const RawFn = *const fn ([*]const f64, c_int, [*]const f64, usize, c_int, [*]const f64, f64, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_twed);
-    try expect(raw(&a, 3, &t, 0, 3, &t, 0.5, 0.5, &dist) == -1);
+    try expect(abi.ts_twed(&a, 3, &t, null, 3, &t, 0.5, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_twed null a_times pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
     var dist: f64 = undefined;
-    const RawFn = *const fn ([*]const f64, c_int, usize, [*]const f64, c_int, [*]const f64, f64, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_twed);
-    try expect(raw(&a, 3, 0, &a, 3, &t, 0.5, 0.5, &dist) == -1);
+    try expect(abi.ts_twed(&a, 3, null, &a, 3, &t, 0.5, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_twed null b_times pointer -> error" {
     const a = [_]f64{ 1, 2, 3 };
     const t = [_]f64{ 0, 1, 2 };
     var dist: f64 = undefined;
-    const RawFn = *const fn ([*]const f64, c_int, [*]const f64, [*]const f64, c_int, usize, f64, f64, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_twed);
-    try expect(raw(&a, 3, &t, &a, 3, 0, 0.5, 0.5, &dist) == -1);
+    try expect(abi.ts_twed(&a, 3, &t, &a, 3, null, 0.5, 0.5, &dist) == -1);
 }
 
 test "ABI: ts_matrix_profile null values pointer -> error" {
     var profile: [10]f64 = undefined;
     var indices: [10]i32 = undefined;
     var plen: c_int = undefined;
-    const RawFn = *const fn (usize, c_int, c_int, ?[*]f64, ?[*]i32, ?*c_int, c_int) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_matrix_profile);
-    try expect(raw(0, 10, 3, &profile, &indices, &plen, 10) == -1);
+    try expect(abi.ts_matrix_profile(null, 10, 3, &profile, &indices, &plen, 10) == -1);
 }
 
 test "ABI: ts_mp_dist null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
     var dist: f64 = undefined;
-    const RawFn = *const fn (usize, c_int, [*]const f64, c_int, c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_mp_dist);
-    try expect(raw(0, 10, &b, 10, 3, &dist) == -1);
+    try expect(abi.ts_mp_dist(null, 10, &b, 10, 3, &dist) == -1);
 }
 
 test "ABI: ts_extract_features null values pointer -> error" {
     var feats: [22]f64 = undefined;
-    const RawFn = *const fn (usize, c_int, ?[*]f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_extract_features);
-    try expect(raw(0, 3, &feats) == -1);
+    try expect(abi.ts_extract_features(null, 3, &feats) == -1);
 }
 
 test "ABI: ts_cosine_similarity null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var result: f64 = undefined;
-    const RawFn = *const fn (usize, [*]const f64, c_int, ?*f64) callconv(.c) c_int;
-    const raw = asRaw(RawFn, &abi.ts_cosine_similarity);
-    try expect(raw(0, &b, 3, &result) == -1);
+    try expect(abi.ts_cosine_similarity(null, &b, 3, &result) == -1);
 }

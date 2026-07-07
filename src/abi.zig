@@ -67,9 +67,9 @@ fn copyDtwPath(
 
 /// Constrained DTW with Sakoe-Chiba band.
 pub export fn ts_dtw(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     band: c_int,
     dist: ?*f64,
@@ -84,12 +84,13 @@ pub export fn ts_dtw(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     // Create bounded slices from raw C pointers
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const band_u: usize = if (band <= 0) 0 else @intCast(band);
     const result = dtw.constrainedDTW(abi_allocator, a_slice, b_slice, band_u) catch return -1;
@@ -98,9 +99,9 @@ pub export fn ts_dtw(
 
 /// Derivative DTW.
 pub export fn ts_dtw_derivative(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     band: c_int,
     dist: ?*f64,
@@ -115,11 +116,12 @@ pub export fn ts_dtw_derivative(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const band_u: usize = if (band <= 0) 0 else @intCast(band);
     const result = dtw.derivativeDTW(abi_allocator, a_slice, b_slice, band_u) catch return -1;
@@ -128,9 +130,9 @@ pub export fn ts_dtw_derivative(
 
 /// Open-end DTW.
 pub export fn ts_dtw_open_end(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     band: c_int,
     dist: ?*f64,
@@ -145,11 +147,12 @@ pub export fn ts_dtw_open_end(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const band_u: usize = if (band <= 0) 0 else @intCast(band);
     const result = dtw.openEndDTW(abi_allocator, a_slice, b_slice, band_u) catch return -1;
@@ -158,9 +161,9 @@ pub export fn ts_dtw_open_end(
 
 /// Shape DTW with local descriptors.
 pub export fn ts_dtw_shape(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     band: c_int,
     descriptor_len: c_int,
@@ -177,11 +180,12 @@ pub export fn ts_dtw_shape(
     if (a_len <= 0 or b_len <= 0) return -1;
     if (descriptor_len <= 0) return -1;
     if (path_cap < 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const band_u: usize = if (band <= 0) 0 else @intCast(band);
     const dlen: usize = @intCast(descriptor_len);
@@ -191,20 +195,21 @@ pub export fn ts_dtw_shape(
 
 /// Soft DTW (differentiable).
 pub export fn ts_soft_dtw(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     gamma: f64,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     dist_ptr.* = dtw.softDTW(abi_allocator, a_slice, b_slice, gamma) catch return -1;
     return 0;
@@ -212,20 +217,21 @@ pub export fn ts_soft_dtw(
 
 /// LB_Keogh lower bound on DTW.
 pub export fn ts_lb_keogh(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     band: c_int,
     result: ?*f64,
 ) callconv(.c) c_int {
     const result_ptr = result orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const band_u: usize = if (band <= 0) 0 else @intCast(band);
     result_ptr.* = dtw.lbKeogh(a_slice, b_slice, band_u);
@@ -238,9 +244,9 @@ pub export fn ts_lb_keogh(
 
 /// Normalized cross-correlation.
 pub export fn ts_cross_correlate(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     lag: ?*c_int,
     corr: ?*f64,
@@ -248,11 +254,12 @@ pub export fn ts_cross_correlate(
     const lag_ptr = lag orelse return -1;
     const corr_ptr = corr orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     // FFI boundary has no caller allocator to thread through; use the
     // module-level page_allocator like every other ABI export.
@@ -264,19 +271,20 @@ pub export fn ts_cross_correlate(
 
 /// Shape-based distance.
 pub export fn ts_sbd(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     // FFI boundary has no caller allocator to thread through; use the
     // module-level page_allocator like every other ABI export.
@@ -286,7 +294,7 @@ pub export fn ts_sbd(
 
 /// PELT segmentation.
 pub export fn ts_pelt(
-    values: [*]const f64,
+    values: ?[*]const f64,
     values_len: c_int,
     penalty: f64,
     min_size: c_int,
@@ -300,8 +308,8 @@ pub export fn ts_pelt(
     if (cps_cap < 0) return -1;
     const n: usize = @intCast(values_len);
     if (n > 0) {
-        if (@intFromPtr(values) == 0) return -1;
-        const v_slice = values[0..n];
+        const values_ptr = values orelse return -1;
+        const v_slice = values_ptr[0..n];
         if (!validateFiniteSlice(v_slice)) return -1;
         const ms: usize = if (min_size <= 0) 1 else @intCast(min_size);
         const result = pelt_mod.pelt(abi_allocator, v_slice, penalty, ms) catch return -1;
@@ -320,9 +328,9 @@ pub export fn ts_pelt(
 
 /// LCSS distance.
 pub export fn ts_lcss(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     epsilon: f64,
     delta: c_int,
@@ -330,11 +338,12 @@ pub export fn ts_lcss(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     const delta_u: usize = if (delta <= 0) 0 else @intCast(delta);
     dist_ptr.* = distances.lcss(abi_allocator, a_slice, b_slice, epsilon, delta_u) catch return -1;
@@ -343,20 +352,21 @@ pub export fn ts_lcss(
 
 /// EDR distance.
 pub export fn ts_edr(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     epsilon: f64,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     dist_ptr.* = distances.edr(abi_allocator, a_slice, b_slice, epsilon) catch return -1;
     return 0;
@@ -364,20 +374,21 @@ pub export fn ts_edr(
 
 /// ERP distance.
 pub export fn ts_erp(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     gap_value: f64,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     dist_ptr.* = distances.erp(abi_allocator, a_slice, b_slice, gap_value) catch return -1;
     return 0;
@@ -385,26 +396,28 @@ pub export fn ts_erp(
 
 /// TWED distance.
 pub export fn ts_twed(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    a_times: [*]const f64,
-    b: [*]const f64,
+    a_times: ?[*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
-    b_times: [*]const f64,
+    b_times: ?[*]const f64,
     lambda: f64,
     nu: f64,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
-    if (@intFromPtr(a_times) == 0 or @intFromPtr(b_times) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
+    const a_times_ptr = a_times orelse return -1;
+    const b_times_ptr = b_times orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
-    const at_slice = a_times[0..n];
-    const bt_slice = b_times[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
+    const at_slice = a_times_ptr[0..n];
+    const bt_slice = b_times_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     if (!validateFiniteSlice(at_slice) or !validateFiniteSlice(bt_slice)) return -1;
     dist_ptr.* = distances.twed(abi_allocator, a_slice, at_slice, b_slice, bt_slice, lambda, nu) catch return -1;
@@ -413,7 +426,7 @@ pub export fn ts_twed(
 
 /// Matrix profile computation.
 pub export fn ts_matrix_profile(
-    values: [*]const f64,
+    values: ?[*]const f64,
     values_len: c_int,
     window_len: c_int,
     profile: ?[*]f64,
@@ -426,10 +439,10 @@ pub export fn ts_matrix_profile(
     const profile_len_ptr = profile_len orelse return -1;
     if (values_len <= 0 or window_len <= 0) return -1;
     if (out_cap < 0) return -1;
-    if (@intFromPtr(values) == 0) return -1;
+    const values_ptr = values orelse return -1;
     const n: usize = @intCast(values_len);
     const w: usize = @intCast(window_len);
-    const v_slice = values[0..n];
+    const v_slice = values_ptr[0..n];
     if (!validateFiniteSlice(v_slice)) return -1;
     // Pre-check: profile length = values_len - window_len + 1.
     if (w <= n) {
@@ -449,21 +462,22 @@ pub export fn ts_matrix_profile(
 
 /// Matrix Profile distance.
 pub export fn ts_mp_dist(
-    a: [*]const f64,
+    a: ?[*]const f64,
     a_len: c_int,
-    b: [*]const f64,
+    b: ?[*]const f64,
     b_len: c_int,
     window_len: c_int,
     dist: ?*f64,
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0 or window_len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const w: usize = @intCast(window_len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..m];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..m];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     dist_ptr.* = mp.mpDist(abi_allocator, a_slice, b_slice, w) catch return -1;
     return 0;
@@ -471,15 +485,15 @@ pub export fn ts_mp_dist(
 
 /// Extract 22-element feature vector.
 pub export fn ts_extract_features(
-    values: [*]const f64,
+    values: ?[*]const f64,
     values_len: c_int,
     features_out: ?[*]f64,
 ) callconv(.c) c_int {
     const features_out_ptr = features_out orelse return -1;
     if (values_len <= 0) return -1;
-    if (@intFromPtr(values) == 0) return -1;
+    const values_ptr = values orelse return -1;
     const n: usize = @intCast(values_len);
-    const v_slice = values[0..n];
+    const v_slice = values_ptr[0..n];
     if (!validateFiniteSlice(v_slice)) return -1;
     const feats = features.extractFeatures(abi_allocator, v_slice) catch return -1;
     for (0..features.FeatureIndex.feature_count) |i| {
@@ -490,17 +504,18 @@ pub export fn ts_extract_features(
 
 /// Cosine similarity between two vectors.
 pub export fn ts_cosine_similarity(
-    a: [*]const f64,
-    b: [*]const f64,
+    a: ?[*]const f64,
+    b: ?[*]const f64,
     len: c_int,
     result: ?*f64,
 ) callconv(.c) c_int {
     const result_ptr = result orelse return -1;
     if (len <= 0) return -1;
-    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    const a_ptr = a orelse return -1;
+    const b_ptr = b orelse return -1;
     const n: usize = @intCast(len);
-    const a_slice = a[0..n];
-    const b_slice = b[0..n];
+    const a_slice = a_ptr[0..n];
+    const b_slice = b_ptr[0..n];
     if (!validateFiniteSlice(a_slice) or !validateFiniteSlice(b_slice)) return -1;
     result_ptr.* = features.cosineSimilarity(a_slice, b_slice);
     return 0;
