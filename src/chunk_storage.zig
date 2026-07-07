@@ -40,6 +40,11 @@ pub fn securePermissions() std.Io.File.Permissions {
 ///     create it with `.exclusive = true` (`O_CREAT | O_EXCL`), which fails
 ///     loudly (`error.PathAlreadyExists`) if the name already exists as
 ///     anything, including a symlink, instead of following it.
+///   * If the exclusive create loses a concurrent-create race (another process
+///     created the file between our `openFile` and `createFile`), it returns
+///     `error.PathAlreadyExists`; we retry the no-follow `openFile`, which
+///     succeeds on a real file created by the winner, or fails closed
+///     (`error.SymLinkLoop`) if the winner planted a symlink.
 ///   * Any other error (e.g. `error.SymLinkLoop` when the name *is* a
 ///     symlink) is propagated so the caller fails closed rather than
 ///     silently writing through an attacker-controlled redirect.
@@ -58,7 +63,16 @@ pub fn openOrCreateNoFollow(io: std.Io, dir: std.Io.Dir, name: []const u8) std.I
         .read = true,
         .exclusive = true,
         .permissions = securePermissions(),
-    });
+    }) catch |err| switch (err) {
+        // Lost a concurrent-create race between the openFile above and this
+        // createFile. Reopen no-follow: succeeds on the real file the winner
+        // created, or fails closed (SymLinkLoop) if the winner planted a symlink.
+        error.PathAlreadyExists => dir.openFile(io, name, .{
+            .mode = .read_write,
+            .follow_symlinks = false,
+        }),
+        else => err,
+    };
 }
 
 /// Resolve `data_dir` to an open, symlink-safe `Dir` handle by walking each
@@ -1629,6 +1643,41 @@ test "chunk_storage: init succeeds when the entire data_dir tree already exists 
 
     try std.testing.expect(storage.data_file != null);
     try std.testing.expect(storage.meta_file != null);
+}
+
+test "chunk_storage: openOrCreateNoFollow reopens an existing real file instead of failing (concurrent file-create robustness)" {
+    // openOrCreateNoFollow's exclusive-create can lose a race to a concurrent
+    // creator and return error.PathAlreadyExists; the fix reopens the file
+    // no-follow. This test exercises that reopen path directly: a first call
+    // creates the file, and a second call for the same name must reopen the
+    // real file (not fail, and not follow a symlink). Data written through the
+    // first handle must be visible through the second.
+    if (@import("builtin").os.tag == .windows) return;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var root_buf: [96]u8 = undefined;
+    const root_dir = std.fmt.bufPrint(&root_buf, "/tmp/ts_test_reopen_race_{d}", .{pid}) catch unreachable;
+    try std.Io.Dir.cwd().createDirPath(io, root_dir);
+    defer std.Io.Dir.cwd().deleteTree(io, root_dir) catch {};
+
+    var dir = try std.Io.Dir.cwd().openDir(io, root_dir, .{ .follow_symlinks = false });
+    defer dir.close(io);
+
+    // First call creates the file exclusively.
+    var f1 = try openOrCreateNoFollow(io, dir, "race.dat");
+    const payload = "concurrent-reopen-marker";
+    try f1.writePositionalAll(io, payload, 0);
+    f1.close(io);
+
+    // Second call must reopen the same real file (the exact path the
+    // PathAlreadyExists branch takes after losing the create race).
+    var f2 = try openOrCreateNoFollow(io, dir, "race.dat");
+    defer f2.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try f2.readPositionalAll(io, read_buf[0..payload.len], 0);
+    try std.testing.expectEqual(payload.len, n);
+    try std.testing.expectEqualStrings(payload, read_buf[0..payload.len]);
 }
 
 test "chunk_storage: init succeeds when an intermediate component is created out-of-band (concurrent-createDir robustness)" {
