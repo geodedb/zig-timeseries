@@ -81,7 +81,10 @@ fn allFinite(values: []const f64) bool {
 
 test "fuzz: constrainedDTW" {
     try std.testing.fuzz(.{}, struct {
-        fn testOne(_: @TypeOf(.{}), input: []const u8) !void {
+        fn testOne(_: @TypeOf(.{}), smith: *std.testing.Smith) !void {
+            var buf: [4096]u8 = undefined;
+            const len = smith.slice(&buf);
+            const input = buf[0..len];
             const pair = bytesToF64Pair(input) orelse return;
             defer pair.deinit();
 
@@ -114,7 +117,10 @@ test "fuzz: constrainedDTW" {
 
 test "fuzz: crossCorrelate" {
     try std.testing.fuzz(.{}, struct {
-        fn testOne(_: @TypeOf(.{}), input: []const u8) !void {
+        fn testOne(_: @TypeOf(.{}), smith: *std.testing.Smith) !void {
+            var buf: [4096]u8 = undefined;
+            const len = smith.slice(&buf);
+            const input = buf[0..len];
             const pair = bytesToF64Pair(input) orelse return;
             defer pair.deinit();
 
@@ -136,7 +142,10 @@ test "fuzz: crossCorrelate" {
 
 test "fuzz: pelt" {
     try std.testing.fuzz(.{}, struct {
-        fn testOne(_: @TypeOf(.{}), input: []const u8) !void {
+        fn testOne(_: @TypeOf(.{}), smith: *std.testing.Smith) !void {
+            var buf: [4096]u8 = undefined;
+            const len = smith.slice(&buf);
+            const input = buf[0..len];
             const f64_size = @sizeOf(f64);
             const n = @min(input.len / f64_size, 100);
             if (n == 0) return;
