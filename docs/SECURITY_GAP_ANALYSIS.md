@@ -171,7 +171,7 @@ Memory exhaustion via quadratic allocation and CPU exhaustion via cubic computat
 
 ## Risk Score Methodology
 
-```
+```text
 Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 ```
 
