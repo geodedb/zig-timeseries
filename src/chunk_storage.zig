@@ -17,6 +17,47 @@ pub fn securePermissions() std.Io.File.Permissions {
     return if (@import("builtin").os.tag == .windows) .default_file else @enumFromInt(0o600);
 }
 
+/// Open an existing persistence file for read-write without following a
+/// symlink planted at `path`, creating it exclusively if it does not
+/// already exist.
+///
+/// NEW-3: `std.Io.Dir.CreateFileOptions` has no `follow_symlinks` field, and
+/// its `.resolve_beneath` option is a silent no-op on Linux (RESOLVE_BENEATH
+/// only exists in Darwin/FreeBSD's `posix.O`; Linux's has no such field). A
+/// bare `createFile` therefore happily follows a pre-planted symlink at a
+/// low-entropy, often /tmp-based data_dir path and writes serialized data
+/// straight through to whatever file the symlink targets.
+///
+/// Strategy: try to `openFile` the existing path with `.follow_symlinks =
+/// false` first.
+///   * If it succeeds, the path was a real (non-symlink) file — use that
+///     handle. `openFile` never truncates, so append/no-truncate semantics
+///     are preserved exactly as before.
+///   * If it fails with `error.FileNotFound`, the path doesn't exist yet —
+///     create it with `.exclusive = true` (`O_CREAT | O_EXCL`), which fails
+///     loudly (`error.PathAlreadyExists`) if the path already exists as
+///     anything, including a symlink, instead of following it.
+///   * Any other error (e.g. `error.SymLinkLoop` when the path *is* a
+///     symlink) is propagated so the caller fails closed rather than
+///     silently writing through an attacker-controlled redirect.
+pub fn openOrCreateNoFollow(io: std.Io, path: []const u8) std.Io.File.OpenError!std.Io.File {
+    const existing = std.Io.Dir.cwd().openFile(io, path, .{
+        .mode = .read_write,
+        .follow_symlinks = false,
+    });
+    if (existing) |file| {
+        return file;
+    } else |err| {
+        if (err != error.FileNotFound) return err;
+    }
+
+    return std.Io.Dir.cwd().createFile(io, path, .{
+        .read = true,
+        .exclusive = true,
+        .permissions = securePermissions(),
+    });
+}
+
 /// Gorilla-inspired compression for time-series data.
 pub const ChunkConfig = struct {
     max_points_per_chunk: usize = 4096,
@@ -461,12 +502,7 @@ pub const ChunkStorage = struct {
         const chunks_path = try std.fmt.allocPrint(allocator, "{s}/chunks.dat", .{data_dir});
         defer allocator.free(chunks_path);
 
-        self.data_file = try std.Io.Dir.cwd().createFile(io, chunks_path, .{
-            .read = true,
-            .truncate = false,
-            .permissions = securePermissions(),
-            .resolve_beneath = true,
-        });
+        self.data_file = try openOrCreateNoFollow(io, chunks_path);
 
         // Determine current file length so new writes append after existing data.
         self.data_offset = (self.data_file.?).length(io) catch 0;
@@ -474,12 +510,7 @@ pub const ChunkStorage = struct {
         const meta_path = try std.fmt.allocPrint(allocator, "{s}/chunk_meta.dat", .{data_dir});
         defer allocator.free(meta_path);
 
-        self.meta_file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
-            .read = true,
-            .truncate = false,
-            .permissions = securePermissions(),
-            .resolve_beneath = true,
-        });
+        self.meta_file = try openOrCreateNoFollow(io, meta_path);
 
         self.meta_offset = (self.meta_file.?).length(io) catch 0;
 
@@ -1220,4 +1251,94 @@ test "chunk_storage: persisted chunks.dat has restrictive 0o600 permissions" {
     try std.testing.expect(mode & 0o077 == 0);
     // Owner must retain read/write access.
     try std.testing.expect(mode & 0o600 == 0o600);
+}
+
+test "chunk_storage: init does not follow a symlinked chunks.dat (NEW-3)" {
+    // POSIX-only: relies on O_NOFOLLOW / O_EXCL semantics for symlinks.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_symlink_chunks_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var victim_path_buf: [160]u8 = undefined;
+    const victim_path = std.fmt.bufPrint(&victim_path_buf, "/tmp/ts_test_symlink_chunks_victim_{d}.dat", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteFile(io, victim_path) catch {};
+
+    // Plant a victim file *outside* the data dir with a known marker, then
+    // pre-plant a symlink at the would-be chunks.dat path pointing at it —
+    // simulating an attacker who controls a low-entropy, /tmp-based
+    // data_dir before ChunkStorage.init ever runs.
+    {
+        const victim = try std.Io.Dir.cwd().createFile(io, victim_path, .{ .read = true, .truncate = true });
+        defer victim.close(io);
+        try victim.writePositionalAll(io, "MARKER", 0);
+    }
+
+    try std.Io.Dir.cwd().createDirPath(io, test_dir);
+    var chunks_path_buf: [160]u8 = undefined;
+    const chunks_path = std.fmt.bufPrint(&chunks_path_buf, "{s}/chunks.dat", .{test_dir}) catch unreachable;
+    try std.Io.Dir.symLinkAbsolute(io, victim_path, chunks_path, .{});
+
+    // init must fail closed (not silently follow the symlink and write
+    // through to the victim file) — and must not leak the ChunkStorage's
+    // internal allocations on this error path.
+    const result = ChunkStorage.init(ally, test_dir, .{});
+    try std.testing.expect(std.meta.isError(result));
+
+    // The victim file's content must be completely unchanged.
+    const victim = try std.Io.Dir.cwd().openFile(io, victim_path, .{});
+    defer victim.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try victim.readPositionalAll(io, &read_buf, 0);
+    try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
+}
+
+test "chunk_storage: init does not follow a symlinked chunk_meta.dat (NEW-3)" {
+    // POSIX-only: relies on O_NOFOLLOW / O_EXCL semantics for symlinks.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const ally = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_symlink_meta_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var victim_path_buf: [160]u8 = undefined;
+    const victim_path = std.fmt.bufPrint(&victim_path_buf, "/tmp/ts_test_symlink_meta_victim_{d}.dat", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteFile(io, victim_path) catch {};
+
+    // Plant a victim file *outside* the data dir with a known marker, then
+    // pre-plant a symlink at the would-be chunk_meta.dat path pointing at
+    // it. chunks.dat itself is left untouched so it opens/creates normally,
+    // isolating the regression to the chunk_meta.dat write path.
+    {
+        const victim = try std.Io.Dir.cwd().createFile(io, victim_path, .{ .read = true, .truncate = true });
+        defer victim.close(io);
+        try victim.writePositionalAll(io, "MARKER", 0);
+    }
+
+    try std.Io.Dir.cwd().createDirPath(io, test_dir);
+    var meta_path_buf: [160]u8 = undefined;
+    const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/chunk_meta.dat", .{test_dir}) catch unreachable;
+    try std.Io.Dir.symLinkAbsolute(io, victim_path, meta_path, .{});
+
+    // init must fail closed and must not leak the ChunkStorage's internal
+    // allocations (including the already-opened chunks.dat fd) on this
+    // error path.
+    const result = ChunkStorage.init(ally, test_dir, .{});
+    try std.testing.expect(std.meta.isError(result));
+
+    // The victim file's content must be completely unchanged.
+    const victim = try std.Io.Dir.cwd().openFile(io, victim_path, .{});
+    defer victim.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try victim.readPositionalAll(io, &read_buf, 0);
+    try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
 }

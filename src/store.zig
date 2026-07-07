@@ -614,13 +614,10 @@ pub const Store = struct {
         const meta_path = try std.fmt.allocPrint(self.allocator, "{s}/series_meta.dat", .{cs.data_dir});
         defer self.allocator.free(meta_path);
 
-        // Append-only: open for appending, create if needed.
-        const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
-            .read = true,
-            .truncate = false,
-            .permissions = chunk_storage.securePermissions(),
-            .resolve_beneath = true,
-        });
+        // Append-only: open for appending, create if needed. NEW-3: use the
+        // open-or-exclusive-create helper so a pre-planted symlink at
+        // meta_path causes a loud failure instead of a followed write.
+        const file = try chunk_storage.openOrCreateNoFollow(io, meta_path);
         defer file.close(io);
 
         // Check if this chunk_id is already in the file to avoid duplicates.
@@ -1310,6 +1307,67 @@ test "store: loadAllSeriesKeyMeta does not follow a symlinked series_meta.dat (S
     // loadFromDisk (the real public entrypoint) must also not crash and
     // must degrade gracefully.
     try st2.loadFromDisk();
+}
+
+test "store: saveSeriesKeyMeta does not follow a symlinked series_meta.dat write path (NEW-3)" {
+    // POSIX-only: relies on O_NOFOLLOW / O_EXCL semantics for symlinks.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const allocator = std.testing.allocator;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_symlink_write_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var victim_path_buf: [160]u8 = undefined;
+    const victim_path = std.fmt.bufPrint(&victim_path_buf, "/tmp/ts_store_symlink_write_victim_{d}.dat", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteFile(io, victim_path) catch {};
+
+    // Plant a victim file *outside* the data dir with a known marker.
+    {
+        const victim = try std.Io.Dir.cwd().createFile(io, victim_path, .{ .read = true, .truncate = true });
+        defer victim.close(io);
+        try victim.writePositionalAll(io, "MARKER", 0);
+    }
+
+    // Create the store directory structure (real chunks.dat/chunk_meta.dat)
+    // without ever writing series_meta.dat, then tear the store down.
+    {
+        var st = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+        defer st.deinit();
+    }
+
+    // Pre-plant a symlink at the would-be series_meta.dat path, pointing at
+    // the victim file — simulating an attacker who controls the
+    // low-entropy, /tmp-based data_dir before any series is ever inserted.
+    var meta_path_buf: [160]u8 = undefined;
+    const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/timeseries/series_meta.dat", .{test_dir}) catch unreachable;
+    try std.Io.Dir.symLinkAbsolute(io, victim_path, meta_path, .{});
+
+    // Re-open the store and insert a new series. This is the first insert
+    // for this series_id in-process, so it triggers saveSeriesKeyMeta,
+    // which must fail closed against the planted symlink rather than
+    // writing serialized metadata through to the victim file.
+    var st2 = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+    defer st2.deinit();
+
+    const key = SeriesKey{ .device_id = 1, .metric = "cpu_temp" };
+    const result = st2.insertMany(key, &.{.{ .ts = 1000, .value = 1 }});
+    try std.testing.expect(std.meta.isError(result));
+
+    // SEC-3's rollback must have fired: the chunk_id_to_hash registration
+    // must not remain committed after the failed write, so a retry would
+    // re-run the guard rather than silently skipping persistence forever.
+    try std.testing.expectEqual(@as(usize, 0), st2.chunk_id_to_hash.count());
+
+    // The victim file's content must be completely unchanged.
+    const victim = try std.Io.Dir.cwd().openFile(io, victim_path, .{});
+    defer victim.close(io);
+    var read_buf: [64]u8 = undefined;
+    const n = try victim.readPositionalAll(io, &read_buf, 0);
+    try std.testing.expectEqualStrings("MARKER", read_buf[0..n]);
 }
 
 test "store: insertMany rejects metric names over MAX_METRIC_LEN at the write boundary (SEC-3)" {
