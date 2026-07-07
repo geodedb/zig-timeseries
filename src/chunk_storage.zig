@@ -12,6 +12,11 @@ inline fn gio() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
 
+/// Restrictive file permissions for persisted data (POSIX 0o600; default elsewhere).
+fn securePermissions() std.Io.File.Permissions {
+    return if (@import("builtin").os.tag == .windows) .default_file else @enumFromInt(0o600);
+}
+
 /// Gorilla-inspired compression for time-series data.
 pub const ChunkConfig = struct {
     max_points_per_chunk: usize = 4096,
@@ -433,6 +438,8 @@ pub const ChunkStorage = struct {
         const file = try std.Io.Dir.cwd().createFile(io, chunks_path, .{
             .read = true,
             .truncate = false,
+            .permissions = securePermissions(),
+            .resolve_beneath = true,
         });
 
         // Determine current file length so new writes append after existing data.
@@ -635,6 +642,8 @@ pub const ChunkStorage = struct {
         const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
             .read = true,
             .truncate = false,
+            .permissions = securePermissions(),
+            .resolve_beneath = true,
         });
         defer file.close(io);
 
@@ -1086,4 +1095,31 @@ test "chunk_storage: valid path accepted" {
 
     // If we got here, the valid path was accepted.
     try std.testing.expect(storage.data_file != null);
+}
+
+test "chunk_storage: persisted chunks.dat has restrictive 0o600 permissions" {
+    // POSIX-only: Windows does not have POSIX mode bits.
+    if (@import("builtin").os.tag == .windows) return;
+
+    const ally = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_perms_{d}", .{pid}) catch unreachable;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    defer std.Io.Dir.cwd().deleteTree(io, test_dir) catch {};
+
+    var storage = try ChunkStorage.init(ally, test_dir, .{});
+    defer storage.deinit();
+
+    var chunks_path_buf: [160]u8 = undefined;
+    const chunks_path = std.fmt.bufPrint(&chunks_path_buf, "{s}/chunks.dat", .{test_dir}) catch unreachable;
+
+    const stat = try std.Io.Dir.cwd().statFile(io, chunks_path, .{});
+    const mode: u32 = @intFromEnum(stat.permissions);
+
+    // Group/other bits must be clear regardless of umask.
+    try std.testing.expect(mode & 0o077 == 0);
+    // Owner must retain read/write access.
+    try std.testing.expect(mode & 0o600 == 0o600);
 }

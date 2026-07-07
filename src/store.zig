@@ -8,6 +8,11 @@ const std = @import("std");
 const chunk_storage = @import("chunk_storage.zig");
 const observability = @import("observability");
 
+/// Restrictive file permissions for persisted data (POSIX 0o600; default elsewhere).
+fn securePermissions() std.Io.File.Permissions {
+    return if (@import("builtin").os.tag == .windows) .default_file else @enumFromInt(0o600);
+}
+
 /// Time-series data point.
 pub const Point = struct {
     ts: i64, // Unix timestamp in milliseconds
@@ -544,6 +549,8 @@ pub const Store = struct {
         const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
             .read = true,
             .truncate = false,
+            .permissions = securePermissions(),
+            .resolve_beneath = true,
         });
         defer file.close(io);
 
