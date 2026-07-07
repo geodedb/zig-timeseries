@@ -164,7 +164,11 @@ zig-format:
 # Build job
 build:
   stage: build
-  image: debian:bookworm-slim
+  # SUPPLY-1: pinned to a content digest (not a floating tag) so a
+  # repointed/compromised upstream image can't silently run CI -- this image
+  # is where SEC-4's toolchain-hash verification (curl/sha256sum) executes.
+  # Refresh periodically (e.g. via Renovate) so the pin doesn't rot.
+  image: debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
   before_script:
     - *install-zig
   script:
@@ -175,7 +179,7 @@ build:
 # -Doptimize= entirely (matching Zig's default), other modes pass it explicitly.
 .test-matrix:
   stage: test
-  image: debian:bookworm-slim
+  image: debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
   before_script:
     - *install-zig
   script:
@@ -215,7 +219,7 @@ test-integration:
 #   other : fuzzer found a crash - fail the job
 fuzz:
   stage: fuzz
-  image: debian:bookworm-slim
+  image: debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
   before_script:
     - *install-zig
   script:
@@ -238,7 +242,7 @@ fuzz:
 # Results are stored as artifacts for trend analysis.
 bench-regression:
   stage: fuzz
-  image: debian:bookworm-slim
+  image: debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df
   before_script:
     - *install-zig
   script:
