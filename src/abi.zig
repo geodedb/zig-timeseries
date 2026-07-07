@@ -84,6 +84,7 @@ pub export fn ts_dtw(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     // Create bounded slices from raw C pointers
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
@@ -114,6 +115,7 @@ pub export fn ts_dtw_derivative(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -143,6 +145,7 @@ pub export fn ts_dtw_open_end(
     if (path_len == null) return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
     if (path_cap < 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -174,6 +177,7 @@ pub export fn ts_dtw_shape(
     if (a_len <= 0 or b_len <= 0) return -1;
     if (descriptor_len <= 0) return -1;
     if (path_cap < 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -196,6 +200,7 @@ pub export fn ts_soft_dtw(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -216,6 +221,7 @@ pub export fn ts_lb_keogh(
 ) callconv(.c) c_int {
     const result_ptr = result orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -242,6 +248,7 @@ pub export fn ts_cross_correlate(
     const lag_ptr = lag orelse return -1;
     const corr_ptr = corr orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -263,6 +270,7 @@ pub export fn ts_sbd(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -288,6 +296,7 @@ pub export fn ts_pelt(
     if (cps_cap < 0) return -1;
     const n: usize = @intCast(values_len);
     if (n > 0) {
+        if (@intFromPtr(values) == 0) return -1;
         const v_slice = values[0..n];
         if (!validateFiniteSlice(v_slice)) return -1;
         const ms: usize = if (min_size <= 0) 1 else @intCast(min_size);
@@ -317,6 +326,7 @@ pub export fn ts_lcss(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -338,6 +348,7 @@ pub export fn ts_edr(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -358,6 +369,7 @@ pub export fn ts_erp(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -381,6 +393,8 @@ pub export fn ts_twed(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
+    if (@intFromPtr(a_times) == 0 or @intFromPtr(b_times) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const a_slice = a[0..n];
@@ -408,6 +422,7 @@ pub export fn ts_matrix_profile(
     const profile_len_ptr = profile_len orelse return -1;
     if (values_len <= 0 or window_len <= 0) return -1;
     if (out_cap < 0) return -1;
+    if (@intFromPtr(values) == 0) return -1;
     const n: usize = @intCast(values_len);
     const w: usize = @intCast(window_len);
     const v_slice = values[0..n];
@@ -439,6 +454,7 @@ pub export fn ts_mp_dist(
 ) callconv(.c) c_int {
     const dist_ptr = dist orelse return -1;
     if (a_len <= 0 or b_len <= 0 or window_len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(a_len);
     const m: usize = @intCast(b_len);
     const w: usize = @intCast(window_len);
@@ -457,6 +473,7 @@ pub export fn ts_extract_features(
 ) callconv(.c) c_int {
     const features_out_ptr = features_out orelse return -1;
     if (values_len <= 0) return -1;
+    if (@intFromPtr(values) == 0) return -1;
     const n: usize = @intCast(values_len);
     const v_slice = values[0..n];
     if (!validateFiniteSlice(v_slice)) return -1;
@@ -476,6 +493,7 @@ pub export fn ts_cosine_similarity(
 ) callconv(.c) c_int {
     const result_ptr = result orelse return -1;
     if (len <= 0) return -1;
+    if (@intFromPtr(a) == 0 or @intFromPtr(b) == 0) return -1;
     const n: usize = @intCast(len);
     const a_slice = a[0..n];
     const b_slice = b[0..n];
