@@ -374,6 +374,7 @@ pub const GorillaDecoder = struct {
                 // New leading/trailing.
                 const leading: u8 = @intCast(try self.readBits(5));
                 const significant_bits: u8 = @intCast(try self.readBits(6));
+                if (significant_bits == 0 or @as(u16, leading) + @as(u16, significant_bits) > 64) return error.CorruptChunk;
                 const trailing: u8 = 64 - leading - significant_bits;
                 const shifted = try self.readBits(significant_bits);
                 xor = shifted << @intCast(trailing);
@@ -984,6 +985,23 @@ test "gorilla: encode-decode single point" {
 // ============================================================================
 // Security: Path traversal rejection (S8/S9/S10)
 // ============================================================================
+
+test "gorilla: malformed new leading/trailing widths rejected" {
+    const ally = std.testing.allocator;
+
+    // Hand-crafted bitstream: point 1 is the raw 64+64 header (values
+    // don't matter). Point 2 sets first_bit=0 (delta_of_delta=0),
+    // xor_control=1, xor_type=1 (new leading/trailing), leading=0 (5 bits),
+    // significant_bits=0 (6 bits) -- which would force trailing=64 and
+    // panic on the subsequent shift if unguarded.
+    var buf = [_]u8{0} ** 18;
+    buf[16] = 0x60; // bits: 0 1 1 0 0 0 0 0
+    buf[17] = 0x00; // bits: 0 0 0 0 0 0 0 0
+
+    var decoder = GorillaDecoder.init(&buf, 2);
+    const result = decoder.decodeAll(ally);
+    try std.testing.expectError(error.CorruptChunk, result);
+}
 
 test "chunk_storage: path traversal with .. rejected" {
     const ally = std.testing.allocator;
