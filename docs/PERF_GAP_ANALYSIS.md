@@ -1,18 +1,20 @@
 # Performance Gap Analysis -- Zig Timeseries Library
 
-Last updated: 2026-03-23
+Last updated: 2026-07-07
 
 ## Summary
 
-**Total findings**: 16 (grouped into 13 issues)
+**Total findings**: 17 (grouped into 14 issues)
 
 **Cycle status (2026-03-23):** 12 findings closed (P6 -- page_allocator via Q5; Batch C quick wins: softDTW 2-row, LCSS/EDR/ERP/TWED 2-row, LB_Keogh deque, Store.insertMany merge, baselineCorrect prefix sum, PELT segmentCost cache; P13 -- SIMD cosineSimilarity; P10 -- GorillaEncoder batch writes; P11 -- getCompressedData bulk extraction; P15 -- extractFeatures single-pass), 1 Won't Do (P9 -- matrix profile parallelization), 3 remaining open.
+
+**Cycle status (2026-07-07, Workstream E):** Task E4 discovered and recorded a new open P2 finding (rank 16 below: mpDist/mpDistAbJoinRow O(w) per-pair dot product) while resolving the `parallelBatchCrossCorrelate` stale-comment reference (now implemented, see rank/Issue table row for cross-correlation batching). 4 findings remain open.
 
 | PerfSeverity | Count | Description |
 |-------------|-------|-------------|
 | P0          | 3     | SLO breach / outage risk -- immediate action required |
 | P1          | 5     | Material user-facing impact -- within sprint |
-| P2          | 6     | Moderate impact -- next quarter |
+| P2          | 7     | Moderate impact -- next quarter |
 | P3          | 1     | Minor optimization -- backlog |
 
 **Top 5 risks by expected impact:**
@@ -42,6 +44,7 @@ Last updated: 2026-03-23
 | 13 | P2 | 36 | No SIMD exploitation (0 @Vector uses) | features.zig:122-133 | Scalar f64 reductions on contiguous arrays | 4-8x for vectorizable loops | [#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72) | @Vector(4, f64) for inner loops | suspected | **Closed** (2026-03-22). cosineSimilarity uses @Vector(4, f64) for dot/norm accumulation with scalar remainder loop. |
 | 14 | P2 | 24 | PELT segmentCost called twice per candidate | pelt.zig:79-108 | Same segmentCost(s,t) in optimize + prune | ~1.2-1.5x | [#67](https://gitlab.com/devnw/zig/timeseries/-/issues/67) | Cache cost per candidate | suspected | **Closed** (2026-03-22). Added cost_cache array; optimization loop stores segmentCost, pruning loop reuses it. Falls back to computing for min_size-skipped candidates. |
 | 15 | P3 | 24 | extractFeatures 4+ separate passes | features.zig:25-80 | 6 loops over values array | ~2-3x fewer cache misses | [#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74) | Fuse passes 2-6 into single pass | suspected | **Closed** (2026-03-23). Fused 6 loops into 3 passes: pass 1 (sum+min+max), pass 2 (variance+skewness+kurtosis+slope), sort for median, pass 3 (histogram). |
+| 16 | P2 | 40 | mpDist/mpDistAbJoinRow O(w) dot-product per pair | matrix_profile.zig:253-317 | `mpDistAbJoinRow` recomputes a fresh O(w) dot product for every `(i, j)` pair inside `mpDist`'s O(plen_a) row loop, giving O(plen_a * plen_b * w) total instead of incremental QT updates | plen ~1000-5000 est. 10-50x (STOMP-style AB-join) | Not yet filed (tracked here pending Workstream F issue sync) | Diagonal-recurrence (STOMP-style) incremental QT update for the AB-join case, mirroring the self-join STOMP design already tracked at rank 1 | suspected | Open — needs a benchmark at plen ~= 1000-5000 before committing to the STOMP-AB-join rewrite (P32/#58 follow-up; discovered during Task E4 while resolving the `parallelBatchCrossCorrelate` stale-reference cleanup). |
 
 ## Findings by Area
 
@@ -62,6 +65,7 @@ Last updated: 2026-03-23
 | SIMD exploitation | features.zig + others | P2 | 36 | **Closed** |
 | PELT segmentCost cache | pelt.zig | P2 | 24 | **Closed** |
 | extractFeatures single-pass | features.zig | P3 | 24 | **Closed** |
+| mpDist AB-join O(w) dot-product | matrix_profile.zig | P2 | 40 | Open |
 
 ### Infrastructure (build/CI)
 
@@ -132,3 +136,4 @@ These are algorithmic rewrites with the highest absolute impact:
 | ~~SIMD @Vector gains~~ | ~~Compare `-OReleaseFast` assembly for cosine_similarity with/without manual @Vector~~ | ~~[#72](https://gitlab.com/devnw/zig/timeseries/-/issues/72)~~ **Closed** (2026-03-22) |
 | ~~PELT segmentCost caching~~ | ~~Benchmark showing measurable wall-clock difference~~ | ~~[#67](https://gitlab.com/devnw/zig/timeseries/-/issues/67)~~ **Closed** (2026-03-22) |
 | ~~extractFeatures single-pass~~ | ~~Benchmark with n=10000 showing cache-miss reduction via perf stat~~ | ~~[#74](https://gitlab.com/devnw/zig/timeseries/-/issues/74)~~ **Closed** (2026-03-23) |
+| mpDist/mpDistAbJoinRow AB-join O(w) dot-product | Benchmark `parallelMpDistAbJoin`/`mpDist` at plen ~= 1000-5000 showing wall-clock gain from a STOMP-style incremental QT AB-join vs. the current per-pair O(w) recompute | Not yet filed (2026-07-07) |

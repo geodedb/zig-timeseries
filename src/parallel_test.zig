@@ -174,6 +174,67 @@ test "parallelBatchDistances SBD: matches per-pair serial" {
     }
 }
 
+test "parallelBatchCrossCorrelate: matches per-pair serial" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try tp.ThreadPool.init(allocator, .{ .max_threads = 2 });
+    defer {
+        _ = pool.shutdown(.drain, 5 * std.time.ns_per_s) catch {};
+        pool.deinit();
+    }
+
+    const query = [_]f64{ 1, 2, 3, 4, 5, 4, 3, 2, 1 };
+    var cand_bufs: [6][9]f64 = undefined;
+    for (&cand_bufs, 0..) |*b, k| {
+        for (b, 0..) |*v, i|
+            v.* = @as(f64, @floatFromInt(i)) + @as(f64, @floatFromInt(k)) * 0.5;
+    }
+
+    var candidates: [6][]const f64 = undefined;
+    for (&cand_bufs, 0..) |*b, i| candidates[i] = b[0..];
+
+    var out: [6]parallel.BatchResult(parallel.CorrelationResult) = undefined;
+    const ok = try parallel.parallelBatchCrossCorrelate(
+        allocator,
+        &pool,
+        &query,
+        candidates[0..],
+        &out,
+        .{ .chunk_size = 2 },
+    );
+    try std.testing.expectEqual(@as(usize, 6), ok);
+
+    for (candidates, 0..) |c, idx| {
+        const expected = try ts.distances.crossCorrelate(allocator, &query, c);
+        try std.testing.expectEqual(expected.lag, out[idx].ok.lag);
+        try std.testing.expectApproxEqAbs(expected.correlation, out[idx].ok.correlation, 1e-9);
+    }
+}
+
+test "parallelBatchCrossCorrelate: rejects mismatched output length" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const query = [_]f64{ 1, 2, 3 };
+    const c0 = [_]f64{ 1, 2, 3 };
+    const c1 = [_]f64{ 2, 3, 4 };
+    const candidates = [_][]const f64{ &c0, &c1 };
+
+    var out: [1]parallel.BatchResult(parallel.CorrelationResult) = undefined;
+    const result = parallel.parallelBatchCrossCorrelate(
+        allocator,
+        null,
+        &query,
+        candidates[0..],
+        &out,
+        .{},
+    );
+    try std.testing.expectError(error.LengthMismatch, result);
+}
+
 test "parallelMpDistAbJoin: matches serial mpDist" {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();

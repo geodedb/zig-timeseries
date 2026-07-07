@@ -8,7 +8,9 @@
 //! - `parallelBatchDTW` — DTW (constrained / derivative / open-end / shape
 //!   / soft) over a query vs. `candidates.len` candidate series
 //! - `parallelBatchLbKeogh` — LB_Keogh prefilter over a batch
-//! - `parallelBatchDistances` — SBD / LCSS / EDR / ERP / TWED / cross-corr
+//! - `parallelBatchDistances` — SBD / LCSS / EDR / ERP (see NOTE on TWED)
+//! - `parallelBatchCrossCorrelate` — Pearson-like cross-correlation,
+//!   returns `CorrelationResult` (lag + correlation) per candidate
 //! - `parallelMpDistAbJoin` — MP-distance via AB-join matrix profile,
 //!   parallelized over rows (`i`)
 //!
@@ -414,6 +416,105 @@ fn distanceChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
 fn distanceChunkInline(c: *DistanceChunkCtx) void {
     for (c.candidates, 0..) |cand, idx| {
         c.out_slice[idx] = runDistanceOne(c.allocator, c.query, cand, c.options);
+    }
+}
+
+/// Batch cross-correlation: run `crossCorrelate` between `query` and each
+/// element of `candidates`. `out_results` MUST be the same length as
+/// `candidates`. Mirrors `parallelBatchDistances`'s chunk-dispatch
+/// structure but returns a `CorrelationResult` (lag + correlation) per
+/// pair instead of a scalar distance — use this instead of
+/// `parallelBatchDistances(.{ .metric = .cross_correlate })`, which is
+/// intentionally rejected since its output type doesn't fit the scalar
+/// `BatchResult(f64)` shape.
+pub fn parallelBatchCrossCorrelate(
+    allocator: std.mem.Allocator,
+    pool: ?*tp.ThreadPool,
+    query: []const f64,
+    candidates: []const []const f64,
+    out_results: []BatchResult(CorrelationResult),
+    batch_options: BatchOptions,
+) !usize {
+    if (out_results.len != candidates.len) return error.LengthMismatch;
+    if (candidates.len == 0) return 0;
+
+    if (pool == null or candidates.len == 1) {
+        var ok_count: usize = 0;
+        for (candidates, 0..) |c, idx| {
+            out_results[idx] = runCrossCorrelateOne(allocator, query, c);
+            if (out_results[idx] == .ok) ok_count += 1;
+        }
+        return ok_count;
+    }
+
+    const chunk_size = if (batch_options.chunk_size == 0) default_chunk_size else batch_options.chunk_size;
+    const p = pool.?;
+    const n_chunks = (candidates.len + chunk_size - 1) / chunk_size;
+
+    const ctxs = try allocator.alloc(CrossCorrChunkCtx, n_chunks);
+    defer allocator.free(ctxs);
+
+    var wg = p.waitGroup();
+
+    var i: usize = 0;
+    var ci: usize = 0;
+    while (i < candidates.len) : (ci += 1) {
+        const end = @min(i + chunk_size, candidates.len);
+        ctxs[ci] = .{
+            .allocator = allocator,
+            .query = query,
+            .candidates = candidates[i..end],
+            .out_slice = out_results[i..end],
+            .wg = &wg,
+        };
+        i = end;
+    }
+    wg.add(@intCast(n_chunks));
+
+    for (ctxs, 0..) |*c, k| {
+        _ = p.submit(crossCorrChunkTask, c, .{ .lane = batch_options.lane }) catch {
+            for (ctxs[k..]) |*rest| {
+                crossCorrChunkInline(rest);
+                rest.wg.done();
+            }
+            break;
+        };
+    }
+    wg.wait();
+
+    var ok_count: usize = 0;
+    for (out_results) |r| if (r == .ok) {
+        ok_count += 1;
+    };
+    return ok_count;
+}
+
+fn runCrossCorrelateOne(
+    allocator: std.mem.Allocator,
+    a: []const f64,
+    b: []const f64,
+) BatchResult(CorrelationResult) {
+    const result = distances_mod.crossCorrelate(allocator, a, b) catch |e| return .{ .err = mapTsError(e) };
+    return .{ .ok = result };
+}
+
+const CrossCorrChunkCtx = struct {
+    allocator: std.mem.Allocator,
+    query: []const f64,
+    candidates: []const []const f64,
+    out_slice: []BatchResult(CorrelationResult),
+    wg: *tp.WaitGroup,
+};
+
+fn crossCorrChunkTask(ctx_: *anyopaque, _: *tp.TaskContext) void {
+    const c: *CrossCorrChunkCtx = @ptrCast(@alignCast(ctx_));
+    crossCorrChunkInline(c);
+    c.wg.done();
+}
+
+fn crossCorrChunkInline(c: *CrossCorrChunkCtx) void {
+    for (c.candidates, 0..) |cand, idx| {
+        c.out_slice[idx] = runCrossCorrelateOne(c.allocator, c.query, cand);
     }
 }
 
