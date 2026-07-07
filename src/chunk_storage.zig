@@ -437,10 +437,31 @@ pub const ChunkStorage = struct {
         // Ensure the data directory exists.
         std.Io.Dir.cwd().createDirPath(io, data_dir) catch {};
 
+        // Own the data_dir string first: it's the only non-optional owned
+        // field and doesn't depend on either file handle, so constructing
+        // `self` here (with both file fields null) gives errdefer a single,
+        // always-safe point to take ownership from — zero leak windows for
+        // the fds below, and no double-close since deinit() is the only
+        // closer on every error path.
+        const dir = try allocator.dupe(u8, data_dir);
+
+        var self = ChunkStorage{
+            .allocator = allocator,
+            .config = config,
+            .chunks = .empty,
+            .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
+            .data_file = null,
+            .data_offset = 0,
+            .meta_file = null,
+            .meta_offset = 0,
+            .data_dir = dir,
+        };
+        errdefer self.deinit();
+
         const chunks_path = try std.fmt.allocPrint(allocator, "{s}/chunks.dat", .{data_dir});
         defer allocator.free(chunks_path);
 
-        const file = try std.Io.Dir.cwd().createFile(io, chunks_path, .{
+        self.data_file = try std.Io.Dir.cwd().createFile(io, chunks_path, .{
             .read = true,
             .truncate = false,
             .permissions = securePermissions(),
@@ -448,39 +469,19 @@ pub const ChunkStorage = struct {
         });
 
         // Determine current file length so new writes append after existing data.
-        const end_pos = file.length(io) catch 0;
+        self.data_offset = (self.data_file.?).length(io) catch 0;
 
         const meta_path = try std.fmt.allocPrint(allocator, "{s}/chunk_meta.dat", .{data_dir});
         defer allocator.free(meta_path);
 
-        const meta_file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
+        self.meta_file = try std.Io.Dir.cwd().createFile(io, meta_path, .{
             .read = true,
             .truncate = false,
             .permissions = securePermissions(),
             .resolve_beneath = true,
         });
 
-        const meta_end_pos = meta_file.length(io) catch 0;
-
-        var self = ChunkStorage{
-            .allocator = allocator,
-            .config = config,
-            .chunks = .empty,
-            .index = std.AutoHashMap(u64, std.ArrayList(usize)).init(allocator),
-            .data_file = file,
-            .data_offset = end_pos,
-            .meta_file = meta_file,
-            .meta_offset = meta_end_pos,
-            .data_dir = try allocator.dupe(u8, data_dir),
-        };
-        // self now owns both file handles plus chunks/index/data_dir — a
-        // single errdefer covers all of them so any error surfaced by
-        // loadChunkMeta (e.g. error.CorruptMeta from a corrupt trailing
-        // chunk_meta.dat record) can't leak the accumulated state. The
-        // per-file errdefers that used to guard `file`/`meta_file`
-        // individually are intentionally removed here to avoid a
-        // double-close once self.deinit() takes over.
-        errdefer self.deinit();
+        self.meta_offset = (self.meta_file.?).length(io) catch 0;
 
         // Load persisted chunk metadata if available.
         try self.loadChunkMeta();
@@ -1132,9 +1133,37 @@ test "chunk_storage: init leak-free when loadChunkMeta returns error.CorruptMeta
 
     // Phase 3: re-init should surface error.CorruptMeta with zero leaks —
     // ChunkStorage.init's internal chunks/index/data_dir must all be freed
-    // on this error path.
+    // on this error path. This also exercises fd-leak window (a) from the
+    // fd-leak fix: by this point both data_file and meta_file are open and
+    // errdefer self.deinit() is registered, so loadChunkMeta's failure must
+    // close both fds via self.deinit() with no leaks (verified by
+    // std.testing.allocator's leak detector) and without crashing on the
+    // (fully populated) intermediate state.
     const result = ChunkStorage.init(ally, test_dir, .{});
     try std.testing.expectError(error.CorruptMeta, result);
+}
+
+test "chunk_storage: init leak-free when the data_dir allocation fails (fd-leak window b)" {
+    // Regression test for the fd-leak fix: ChunkStorage.init now dupes
+    // data_dir and constructs `self` (with data_file/meta_file both null)
+    // *before* opening either file, so a failure at (or before) that first
+    // allocation can never leak an fd — there simply isn't one open yet.
+    // Failing allocation index 0 targets exactly that `allocator.dupe(u8,
+    // data_dir)` call, the first allocation performed by init.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+    const ally = failing.allocator();
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_init_oom_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+
+    const result = ChunkStorage.init(ally, test_dir, .{});
+    try std.testing.expectError(error.OutOfMemory, result);
+
+    // No file handles were ever opened on this path, so there is nothing
+    // for the underlying (non-failing) allocator to have leaked either.
+    try std.testing.expectEqual(@as(usize, 0), failing.allocated_bytes - failing.freed_bytes);
 }
 
 test "chunk_storage: path traversal with .. rejected" {
