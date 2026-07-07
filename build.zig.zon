@@ -2,7 +2,7 @@
     .name = .timeseries,
     .version = "0.1.10",
     .fingerprint = 0xf55a0ccd3a300188,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .thread_pool = .{
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git?ref=v0.2.6#aa4493781d962f42ba1dd37261e0e107be5f6ffe",
