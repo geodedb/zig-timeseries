@@ -103,24 +103,28 @@ pub fn main() !void {
     // -- 6. Chunk storage with Gorilla compression --
     try stdout.print("6. Chunk storage with Gorilla compression\n", .{});
 
-    const pid = std.os.linux.getpid();
+    // Cross-platform unique-per-run scratch directory: `std.Thread.getCurrentId()`
+    // works on every target Zig supports, unlike the Linux-only
+    // `std.os.linux.getpid()` this replaces.
+    const unique_id = std.Thread.getCurrentId();
     var path_buf: [128]u8 = undefined;
-    const data_dir = try std.fmt.bufPrint(&path_buf, "/tmp/ts_example_basic_{d}", .{pid});
+    const data_dir = try std.fmt.bufPrint(&path_buf, "/tmp/ts_example_basic_{d}", .{unique_id});
     defer std.Io.Dir.cwd().deleteTree(io, data_dir) catch {};
 
     var storage = try ts.ChunkStorage.init(allocator, data_dir, .{});
     defer storage.deinit();
 
     const series_id: u64 = 42;
-    try storage.writePoints(series_id, &.{
+    const written_points = [_]ts.Point{
         .{ .ts = 1000, .value = 100 },
         .{ .ts = 2000, .value = 110 },
         .{ .ts = 3000, .value = 90 },
-    });
+    };
+    try storage.writePoints(series_id, &written_points);
 
     const queried = try storage.queryRange(series_id, 0, 5000, allocator);
     defer allocator.free(queried);
-    try stdout.print("   writePoints: compressed and persisted {d} points\n", .{3});
+    try stdout.print("   writePoints: compressed and persisted {d} points\n", .{written_points.len});
     try stdout.print("   queryRange:  round-tripped {d} points -> [", .{queried.len});
     for (queried, 0..) |p, i| {
         if (i != 0) try stdout.print(", ", .{});
