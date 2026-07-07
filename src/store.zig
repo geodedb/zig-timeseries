@@ -183,10 +183,13 @@ pub const Store = struct {
         const hk = self.hashKey(key);
         if (self.by_key.get(hk)) |sp| return sp;
         const s = try self.allocator.create(Series);
+        errdefer self.allocator.destroy(s);
+        const metric_dup = try self.allocator.dupe(u8, key.metric);
+        errdefer self.allocator.free(metric_dup);
         s.* = .{
             .key = .{
                 .device_id = key.device_id,
-                .metric = try self.allocator.dupe(u8, key.metric),
+                .metric = metric_dup,
             },
             .points = .empty,
         };
@@ -1474,6 +1477,44 @@ test "store: initWithConfig leak-free when ChunkStorage.init returns error.Corru
         .chunk_config = .{ .max_points_per_chunk = 1 },
     });
     try std.testing.expectError(error.CorruptMeta, result);
+}
+
+test "store: getOrCreateSeries frees the Series on metric-dupe OOM (no leak)" {
+    // Regression test: getOrCreateSeries allocates a new Series via
+    // allocator.create, then dupes key.metric onto it. If the dupe fails,
+    // the just-created Series must not leak. fail_index=1 targets exactly
+    // the second allocation (the metric dupe) -- allocation 0 is the
+    // `allocator.create(Series)` call itself, which must succeed so the
+    // dupe failure path is actually exercised.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1 });
+    const ally = failing.allocator();
+
+    var st = Store.init(ally);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 1, .metric = "cpu" };
+    const result = st.insertMany(key, &.{.{ .ts = 1000, .value = 1 }});
+    try std.testing.expectError(error.OutOfMemory, result);
+
+    try std.testing.expectEqual(@as(usize, 0), failing.allocated_bytes - failing.freed_bytes);
+}
+
+test "store: getOrCreateSeries frees the Series when by_key.put OOMs (no leak)" {
+    // Regression test: if the hashmap put() itself fails (its first
+    // internal allocation), the Series created just before it must still
+    // not leak. fail_index=2 lands on the map's first bucket-array
+    // allocation: 0 = create(Series), 1 = metric dupe, 2 = by_key.put.
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
+    const ally = failing.allocator();
+
+    var st = Store.init(ally);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 1, .metric = "cpu" };
+    const result = st.insertMany(key, &.{.{ .ts = 1000, .value = 1 }});
+    try std.testing.expectError(error.OutOfMemory, result);
+
+    try std.testing.expectEqual(@as(usize, 0), failing.allocated_bytes - failing.freed_bytes);
 }
 
 test "fips-exempt annotation present on series-key Wyhash site" {
