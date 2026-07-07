@@ -83,6 +83,9 @@ pub const SampleRow = struct { ts: i64, value: ?i64 };
 pub const BucketAvgRow = struct { ts: i64, avg: ?i64 };
 
 /// Configuration for optional disk persistence.
+/// Max length of a persisted metric name (corruption/DoS guard).
+const MAX_METRIC_LEN: u32 = 4096;
+
 pub const StoreConfig = struct {
     data_dir: ?[]const u8 = null,
     chunk_config: chunk_storage.ChunkConfig = .{},
@@ -622,6 +625,7 @@ pub const Store = struct {
             if (len_read < 4) break;
             pos += len_read;
             const metric_len = std.mem.readInt(u32, &len_buf, .little);
+            if (metric_len > MAX_METRIC_LEN) return error.CorruptMeta;
 
             const metric = try self.allocator.alloc(u8, metric_len);
             const m_read = file.readPositionalAll(io, metric, pos) catch {
@@ -673,6 +677,7 @@ pub const Store = struct {
             if (len_read < 4) break;
             pos += len_read;
             const metric_len = std.mem.readInt(u32, &len_buf, .little);
+            if (metric_len > MAX_METRIC_LEN) return error.CorruptMeta;
 
             const metric = try self.allocator.alloc(u8, metric_len);
             const m_read = file.readPositionalAll(io, metric, pos) catch {
@@ -981,6 +986,37 @@ test "store: init backward compat — in-memory only" {
     const l = st.last(key).?;
     try std.testing.expectEqual(@as(i64, 600), l.ts);
     try std.testing.expect(st.chunk_store == null);
+}
+
+test "store: loadFromDisk rejects oversized metric_len in series_meta.dat" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_bad_metric_len_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+
+    var st = try Store.initWithConfig(allocator, .{ .data_dir = test_dir });
+    defer st.deinit();
+
+    const cs = st.chunk_store.?;
+    const io = std.Io.Threaded.global_single_threaded.io();
+
+    const meta_path = try std.fmt.allocPrint(allocator, "{s}/series_meta.dat", .{cs.data_dir});
+    defer allocator.free(meta_path);
+
+    const file = try std.Io.Dir.cwd().createFile(io, meta_path, .{ .read = true, .truncate = true });
+    defer file.close(io);
+
+    // Single record: chunk_id (8) | device_id (8) | metric_len (4) = 0xFFFFFFFF, no metric bytes.
+    var buf: [20]u8 = undefined;
+    std.mem.writeInt(u64, buf[0..8], 1, .little);
+    std.mem.writeInt(i64, buf[8..16], 1, .little);
+    std.mem.writeInt(u32, buf[16..20], 0xFFFFFFFF, .little);
+    try file.writePositionalAll(io, &buf, 0);
+
+    const result = st.loadFromDisk();
+    try std.testing.expectError(error.CorruptMeta, result);
 }
 
 test "fips-exempt annotation present on series-key Wyhash site" {
