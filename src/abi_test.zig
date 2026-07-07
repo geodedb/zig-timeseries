@@ -590,6 +590,15 @@ test "ABI: ts_dtw_derivative null a pointer -> error" {
     try expect(abi.ts_dtw_derivative(null, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
+test "ABI: ts_dtw_derivative null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_derivative(&a, 3, null, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+}
+
 test "ABI: ts_dtw_open_end null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
@@ -597,6 +606,15 @@ test "ABI: ts_dtw_open_end null a pointer -> error" {
     var pj: [10]i32 = undefined;
     var plen: c_int = undefined;
     try expect(abi.ts_dtw_open_end(null, 3, &b, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
+}
+
+test "ABI: ts_dtw_open_end null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_open_end(&a, 3, null, 3, 0, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
 test "ABI: ts_dtw_shape null a pointer -> error" {
@@ -608,16 +626,37 @@ test "ABI: ts_dtw_shape null a pointer -> error" {
     try expect(abi.ts_dtw_shape(null, 3, &b, 3, 0, 3, &dist, &pi, &pj, &plen, 10) == -1);
 }
 
+test "ABI: ts_dtw_shape null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    var pi: [10]i32 = undefined;
+    var pj: [10]i32 = undefined;
+    var plen: c_int = undefined;
+    try expect(abi.ts_dtw_shape(&a, 3, null, 3, 0, 3, &dist, &pi, &pj, &plen, 10) == -1);
+}
+
 test "ABI: ts_soft_dtw null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
     try expect(abi.ts_soft_dtw(null, 3, &b, 3, 1.0, &dist) == -1);
 }
 
+test "ABI: ts_soft_dtw null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_soft_dtw(&a, 3, null, 3, 1.0, &dist) == -1);
+}
+
 test "ABI: ts_lb_keogh null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var result: f64 = undefined;
     try expect(abi.ts_lb_keogh(null, 3, &b, 3, 1, &result) == -1);
+}
+
+test "ABI: ts_lb_keogh null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var result: f64 = undefined;
+    try expect(abi.ts_lb_keogh(&a, 3, null, 3, 1, &result) == -1);
 }
 
 test "ABI: ts_cross_correlate null a pointer -> error" {
@@ -627,10 +666,23 @@ test "ABI: ts_cross_correlate null a pointer -> error" {
     try expect(abi.ts_cross_correlate(null, 3, &b, 3, &lag, &corr) == -1);
 }
 
+test "ABI: ts_cross_correlate null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var lag: c_int = undefined;
+    var corr: f64 = undefined;
+    try expect(abi.ts_cross_correlate(&a, 3, null, 3, &lag, &corr) == -1);
+}
+
 test "ABI: ts_sbd null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
     try expect(abi.ts_sbd(null, 3, &b, 3, &dist) == -1);
+}
+
+test "ABI: ts_sbd null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_sbd(&a, 3, null, 3, &dist) == -1);
 }
 
 test "ABI: ts_pelt null values pointer -> error" {
@@ -645,16 +697,34 @@ test "ABI: ts_lcss null a pointer -> error" {
     try expect(abi.ts_lcss(null, 3, &b, 3, 0.5, 2, &dist) == -1);
 }
 
+test "ABI: ts_lcss null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_lcss(&a, 3, null, 3, 0.5, 2, &dist) == -1);
+}
+
 test "ABI: ts_edr null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
     try expect(abi.ts_edr(null, 3, &b, 3, 0.5, &dist) == -1);
 }
 
+test "ABI: ts_edr null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_edr(&a, 3, null, 3, 0.5, &dist) == -1);
+}
+
 test "ABI: ts_erp null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var dist: f64 = undefined;
     try expect(abi.ts_erp(null, 3, &b, 3, 0.0, &dist) == -1);
+}
+
+test "ABI: ts_erp null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_erp(&a, 3, null, 3, 0.0, &dist) == -1);
 }
 
 test "ABI: ts_twed null a pointer -> error" {
@@ -698,6 +768,12 @@ test "ABI: ts_mp_dist null a pointer -> error" {
     try expect(abi.ts_mp_dist(null, 10, &b, 10, 3, &dist) == -1);
 }
 
+test "ABI: ts_mp_dist null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3, 4, 5, 1, 2, 3, 4, 5 };
+    var dist: f64 = undefined;
+    try expect(abi.ts_mp_dist(&a, 10, null, 10, 3, &dist) == -1);
+}
+
 test "ABI: ts_extract_features null values pointer -> error" {
     var feats: [22]f64 = undefined;
     try expect(abi.ts_extract_features(null, 3, &feats) == -1);
@@ -707,4 +783,10 @@ test "ABI: ts_cosine_similarity null a pointer -> error" {
     const b = [_]f64{ 1, 2, 3 };
     var result: f64 = undefined;
     try expect(abi.ts_cosine_similarity(null, &b, 3, &result) == -1);
+}
+
+test "ABI: ts_cosine_similarity null b pointer -> error" {
+    const a = [_]f64{ 1, 2, 3 };
+    var result: f64 = undefined;
+    try expect(abi.ts_cosine_similarity(&a, null, 3, &result) == -1);
 }
