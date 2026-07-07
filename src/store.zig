@@ -95,6 +95,14 @@ const MAX_METRIC_LEN: u32 = 4096;
 /// time ranges).
 const MAX_BUCKETS: u64 = 1 << 26;
 
+/// Byte budget for the per-bucket scratch allocation in sampleBy and
+/// timeBucketAvg. MAX_BUCKETS alone bounds the *element* count, but each
+/// bucket struct is far larger than 1 byte, so a caller-supplied
+/// interval_ms=1 over a wide-but-legal window can still request tens of
+/// GiB. This caps the actual allocation size, consistent with
+/// distances.zig's MAX_ALLOC_* byte-budget pattern.
+const MAX_BUCKET_ALLOC_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Configuration for optional disk persistence.
 pub const StoreConfig = struct {
     data_dir: ?[]const u8 = null,
@@ -299,6 +307,20 @@ pub const Store = struct {
 
     pub const Bucket = struct { start_ts: i64, end_ts: i64, count: i64, sum: i128 };
 
+    /// Per-bucket aggregation scratch struct used by sampleBy. Named (rather
+    /// than anonymous) so its size can be checked against
+    /// MAX_BUCKET_ALLOC_BYTES before allocating.
+    pub const SampleBucket = struct {
+        start_ts: i64,
+        end_ts: i64,
+        cnt: i64,
+        sum_val: i128,
+        min_val: ?i64,
+        max_val: ?i64,
+        first_pt: ?Point,
+        last_pt: ?Point,
+    };
+
     /// Sample time-series by interval with aggregation.
     pub fn sampleBy(
         self: *Store,
@@ -338,18 +360,14 @@ pub const Store = struct {
             observability.endTimeseriesSpan(__obs_span, true, 0);
             return &.{};
         }
+        const max_sample_buckets_for_bytes: u64 = MAX_BUCKET_ALLOC_BYTES / @sizeOf(SampleBucket);
+        if (n_buckets_u > max_sample_buckets_for_bytes) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
         const n_buckets: usize = @intCast(n_buckets_u);
 
-        var buckets = try allocator.alloc(struct {
-            start_ts: i64,
-            end_ts: i64,
-            cnt: i64,
-            sum_val: i128,
-            min_val: ?i64,
-            max_val: ?i64,
-            first_pt: ?Point,
-            last_pt: ?Point,
-        }, n_buckets);
+        var buckets = try allocator.alloc(SampleBucket, n_buckets);
         defer allocator.free(buckets);
 
         for (0..n_buckets) |i| {
@@ -439,6 +457,11 @@ pub const Store = struct {
         const bucket_seconds_u: u64 = @intCast(bucket_seconds);
         const n_buckets_u: u64 = @divTrunc(span_u + bucket_seconds_u - 1, bucket_seconds_u);
         if (n_buckets_u > MAX_BUCKETS) {
+            observability.endTimeseriesSpan(__obs_span, true, 0);
+            return &.{};
+        }
+        const max_time_buckets_for_bytes: u64 = MAX_BUCKET_ALLOC_BYTES / @sizeOf(Bucket);
+        if (n_buckets_u > max_time_buckets_for_bytes) {
             observability.endTimeseriesSpan(__obs_span, true, 0);
             return &.{};
         }
@@ -877,6 +900,64 @@ test "store: timeBucketAvg overflow-safe span (F7)" {
     );
     defer allocator.free(result);
     try std.testing.expect(result.len == 0);
+}
+
+// ============================================================================
+// NEW-2: bucket allocation byte-cap (element-count cap alone still allows
+// multi-GiB allocations since each bucket struct is far larger than 1 byte).
+// ============================================================================
+
+test "store: sampleBy bucket byte-cap rejects request exceeding MAX_BUCKET_ALLOC_BYTES" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "byte_cap" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    // interval_ms=1 over a 20,000,000ms window requests 20,000,000 buckets
+    // — well under MAX_BUCKETS (67,108,864) but the per-bucket struct size
+    // pushes the total allocation well past the 64MiB byte budget.
+    const result = try st.sampleBy(key, 1, 0, 20_000_000, .avg, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "store: sampleBy bucket byte-cap allows a request just under the budget" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "byte_cap_ok" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    const result = try st.sampleBy(key, 1, 0, 100_000, .avg, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 100_000), result.len);
+}
+
+test "store: timeBucketAvg bucket byte-cap rejects request exceeding MAX_BUCKET_ALLOC_BYTES" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "byte_cap" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    // bucket_seconds=1 over a 5,000,000-unit window requests 5,000,000
+    // buckets — well under MAX_BUCKETS but past the 64MiB byte budget.
+    const result = try st.timeBucketAvg(key, 1, 0, 5_000_000, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "store: timeBucketAvg bucket byte-cap allows a request just under the budget" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+    const key = SeriesKey{ .device_id = 1, .metric = "byte_cap_ok" };
+    try st.insertMany(key, &.{.{ .ts = 0, .value = 10 }});
+
+    const result = try st.timeBucketAvg(key, 1, 0, 100_000, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 100_000), result.len);
 }
 
 test "store: valueAt and lastValue" {
