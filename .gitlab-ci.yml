@@ -6,23 +6,36 @@ default:
   tags:
     - company
 
+# Supply-chain hardening (appsec F8): all ci-catalog components below are
+# pinned to the immutable commit SHA that `v1.43.0` resolved to at the time
+# of pinning, rather than to the mutable tag itself. `glab ci lint` confirmed
+# GitLab's component `include:` accepts a 40-char commit SHA in place of a
+# semver ref.
+#
+#   tag v1.43.0 (gitlab.com/devnw/ci-catalog) -> commit 7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+#
+# Drift-detection expectation: if `git ls-remote https://gitlab.com/devnw/ci-catalog.git v1.43.0`
+# (peeled, i.e. `refs/tags/v1.43.0^{}`) ever reports a different commit than
+# the SHA above, the tag was moved/re-pointed upstream -- treat that as a
+# supply-chain integrity signal requiring investigation before bumping this
+# pin to the new SHA.
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.43.0
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.43.0
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.43.0
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/security-sast@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/zig-format@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.43.0
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.43.0
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.43.0
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
 
 variables:
   ZIG_VERSION: "0.16.0"
