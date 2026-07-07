@@ -20,6 +20,33 @@ errors (`error.OutOfMemory`).
 Chunk size is caller-tunable via `BatchOptions.chunk_size`; the default
 (`parallel.default_chunk_size`) is benchmarked in `tests/bench.zig`.
 
+## Allocator thread-safety contract (SEC-5 / PERF-2)
+
+`crossCorrelate`/`sbd` and the batch entry points above take a
+caller-provided `std.mem.Allocator`. When you pass a non-null
+`*tp.ThreadPool` to `parallelBatchDistances(.{ .metric = .sbd })` or to
+`parallelBatchCrossCorrelate`, worker threads allocate and free FFT
+scratch buffers from that allocator **concurrently** (each dispatched
+chunk does its own alloc/free independently of the others).
+
+**The allocator you pass MUST be thread-safe whenever `pool` is
+non-null.** Safe choices include `std.heap.page_allocator`, or a
+`GeneralPurposeAllocator`/`DebugAllocator` constructed with
+`.thread_safe = true`. Passing a non-thread-safe allocator (a bare
+arena, or a GPA/DebugAllocator without `.thread_safe = true`) together
+with a non-null pool is a data race — concurrent mutation of the
+allocator's internal state from multiple threads with no synchronization.
+
+This constraint does not apply when `pool == null`: all work then runs
+serially on the caller's thread.
+
+## Length-mismatch handling
+
+`parallelBatchDTW`, `parallelBatchLbKeogh`, `parallelBatchDistances`, and
+`parallelBatchCrossCorrelate` all require their `out_*` slice to be the
+same length as `candidates`. A mismatch returns `error.LengthMismatch`
+(not a panic/assert), so callers can detect and handle it.
+
 ## Out-of-scope algorithms
 
 Several algorithms are **intentionally not** parallelized in this iteration:

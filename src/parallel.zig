@@ -24,6 +24,20 @@
 //!
 //! **C ABI exposure:** NONE. Go/Python FFI consumers dispatch across
 //! their own runtime pools; Zig-native callers get this module.
+//!
+//! **Thread-safety contract for the caller-provided allocator (SEC-5 /
+//! PERF-2):** `crossCorrelate`/`sbd` (via `distances.zig`) and the batch
+//! entry points below take a caller-provided `std.mem.Allocator`. When a
+//! non-null `*tp.ThreadPool` is passed to `parallelBatchDistances(.sbd)`
+//! or `parallelBatchCrossCorrelate`, that allocator is used concurrently
+//! from multiple worker threads (each chunk allocates/frees its own FFT
+//! scratch buffers independently). **The allocator MUST be thread-safe
+//! in that case** -- e.g. `std.heap.page_allocator`, or a
+//! `GeneralPurposeAllocator`/`DebugAllocator` constructed with
+//! `.thread_safe = true`. Passing a non-thread-safe allocator (a bare
+//! arena, or a GPA/DebugAllocator without `.thread_safe = true`) alongside
+//! a non-null pool is a data race. When `pool == null`, all work runs
+//! serially on the caller's thread and this constraint does not apply.
 
 const std = @import("std");
 const tp = @import("thread_pool");
@@ -113,7 +127,9 @@ pub fn BatchResult(comptime T: type) type {
 // ============================================================================
 
 /// Batch DTW: run `options.variant` between `query` and each element of
-/// `candidates`. `out_results` MUST be the same length as `candidates`.
+/// `candidates`. `out_results` MUST be the same length as `candidates`;
+/// a mismatch returns `error.LengthMismatch` instead of panicking, so
+/// callers can detect and handle it.
 /// Distances that fail (e.g., candidate too short for derivative DTW)
 /// surface as `.err`; successful ones carry an owned `DtwResult.path`
 /// the caller must free via `result.ok.deinit(allocator)`.
@@ -236,6 +252,9 @@ fn dtwChunkInline(c: *DtwChunkCtx) void {
 
 /// Batch LB_Keogh prefilter. Returns distances directly (no allocation
 /// per result — `lbKeogh` is stack-only for series <= 8192).
+/// `out_distances` MUST be the same length as `candidates`; a mismatch
+/// returns `error.LengthMismatch` instead of panicking, so callers can
+/// detect and handle it.
 pub fn parallelBatchLbKeogh(
     allocator: std.mem.Allocator,
     pool: ?*tp.ThreadPool,
@@ -311,6 +330,9 @@ fn lbKeoghChunkInline(c: *LbKeoghChunkCtx) void {
 
 /// Batch non-DTW distances. Covers sbd/lcss/edr/erp. For
 /// cross-correlation use `parallelBatchCrossCorrelate`.
+/// `out_results` MUST be the same length as `candidates`; a mismatch
+/// returns `error.LengthMismatch` instead of panicking, so callers can
+/// detect and handle it.
 /// NOTE: `.twed` returns `.err = TsError.InvalidInput` — TWED requires
 /// per-timestep time vectors that don't fit the `(query, candidates[])`
 /// batch shape. Use `distances.twed` directly for single-pair TWED.
@@ -421,9 +443,11 @@ fn distanceChunkInline(c: *DistanceChunkCtx) void {
 
 /// Batch cross-correlation: run `crossCorrelate` between `query` and each
 /// element of `candidates`. `out_results` MUST be the same length as
-/// `candidates`. Mirrors `parallelBatchDistances`'s chunk-dispatch
-/// structure but returns a `CorrelationResult` (lag + correlation) per
-/// pair instead of a scalar distance — use this instead of
+/// `candidates`; a mismatch returns `error.LengthMismatch` instead of
+/// panicking, so callers can detect and handle it. Mirrors
+/// `parallelBatchDistances`'s chunk-dispatch structure but returns a
+/// `CorrelationResult` (lag + correlation) per pair instead of a scalar
+/// distance — use this instead of
 /// `parallelBatchDistances(.{ .metric = .cross_correlate })`, which is
 /// intentionally rejected since its output type doesn't fit the scalar
 /// `BatchResult(f64)` shape.
