@@ -87,7 +87,6 @@ pub const SampleRow = struct { ts: i64, value: ?i64 };
 /// Output row from timeBucketAvg.
 pub const BucketAvgRow = struct { ts: i64, avg: ?i64 };
 
-/// Configuration for optional disk persistence.
 /// Max length of a persisted metric name (corruption/DoS guard).
 const MAX_METRIC_LEN: u32 = 4096;
 
@@ -96,6 +95,7 @@ const MAX_METRIC_LEN: u32 = 4096;
 /// time ranges).
 const MAX_BUCKETS: u64 = 1 << 26;
 
+/// Configuration for optional disk persistence.
 pub const StoreConfig = struct {
     data_dir: ?[]const u8 = null,
     chunk_config: chunk_storage.ChunkConfig = .{},
@@ -243,10 +243,15 @@ pub const Store = struct {
             const id_gop = try self.chunk_id_to_hash.getOrPut(chunk_id);
             if (!id_gop.found_existing) {
                 id_gop.value_ptr.* = hk;
-            }
 
-            // Save series key metadata for loadFromDisk recovery.
-            try self.saveSeriesKeyMeta(key, chunk_id);
+                // Save series key metadata for loadFromDisk recovery. Only
+                // needed the first time we see this chunk_id in this
+                // process — either brand new (not yet on disk) or just
+                // hydrated from series_meta.dat by loadAllSeriesKeyMeta
+                // (already persisted). Gating avoids an O(existing-series)
+                // file rescan on every insertMany call.
+                try self.saveSeriesKeyMeta(key, chunk_id);
+            }
 
             const gop = try self.unflushed.getOrPut(hk);
             if (!gop.found_existing) {
@@ -977,6 +982,89 @@ test "store: persist-restart-query round-trip" {
         // Verify ordering preserved.
         try std.testing.expectEqual(@as(i64, 1000), series.?.points.items[0].ts);
         try std.testing.expectEqual(@as(i64, 10), series.?.points.items[0].value);
+    }
+}
+
+test "store: series key persisted exactly once across many inserts, recovered once after reload" {
+    const allocator = std.testing.allocator;
+
+    const pid = std.os.linux.getpid();
+    var path_buf: [128]u8 = undefined;
+    const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_store_persist_many_{d}", .{pid}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+
+    const key = SeriesKey{ .device_id = 7, .metric = "many_inserts" };
+    const n_inserts: i64 = 50;
+
+    // Phase 1: Insert the same series across many separate insertMany calls
+    // (exercises the saveSeriesKeyMeta gate on every call, not just once),
+    // then deinit (flushes to disk).
+    {
+        var st = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 1000 },
+        });
+        defer st.deinit();
+
+        var i: i64 = 0;
+        while (i < n_inserts) : (i += 1) {
+            try st.insertMany(key, &.{.{ .ts = 1000 + i, .value = i }});
+        }
+    }
+
+    // The series_meta.dat file should contain exactly one record for this
+    // series, even though insertMany was called n_inserts times.
+    {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        var meta_path_buf: [160]u8 = undefined;
+        const meta_path = std.fmt.bufPrint(&meta_path_buf, "{s}/timeseries/series_meta.dat", .{test_dir}) catch unreachable;
+        const file = try std.Io.Dir.cwd().openFile(io, meta_path, .{});
+        defer file.close(io);
+
+        var record_count: usize = 0;
+        var pos: u64 = 0;
+        while (true) {
+            var id_buf: [8]u8 = undefined;
+            const id_read = file.readPositionalAll(io, &id_buf, pos) catch break;
+            if (id_read < 8) break;
+            pos += id_read;
+
+            var dev_buf: [8]u8 = undefined;
+            const dev_read = file.readPositionalAll(io, &dev_buf, pos) catch break;
+            if (dev_read < 8) break;
+            pos += dev_read;
+
+            var len_buf: [4]u8 = undefined;
+            const len_read = file.readPositionalAll(io, &len_buf, pos) catch break;
+            if (len_read < 4) break;
+            pos += len_read;
+            const metric_len = std.mem.readInt(u32, &len_buf, .little);
+
+            pos += metric_len;
+            record_count += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 1), record_count);
+    }
+
+    // Phase 2: Re-create store from same data_dir, loadFromDisk, query.
+    {
+        var st2 = try Store.initWithConfig(allocator, .{
+            .data_dir = test_dir,
+            .chunk_config = .{ .max_points_per_chunk = 1000 },
+        });
+        defer st2.deinit();
+
+        try st2.loadFromDisk();
+
+        // Verify the series key was recovered exactly once (single Series
+        // entry, all points present, no duplication).
+        const series = st2.getSeries(key);
+        try std.testing.expect(series != null);
+        try std.testing.expectEqual(@as(usize, @intCast(n_inserts)), series.?.points.items.len);
+
+        const l = st2.last(key);
+        try std.testing.expect(l != null);
+        try std.testing.expectEqual(@as(i64, 1000 + n_inserts - 1), l.?.ts);
     }
 }
 
