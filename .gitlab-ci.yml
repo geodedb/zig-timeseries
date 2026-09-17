@@ -5,6 +5,7 @@
 default:
   tags:
     - company
+    - linux
 
 # Supply-chain hardening (appsec F8): all ci-catalog components below are
 # pinned to the immutable commit SHA that `v1.43.0` resolved to at the time
