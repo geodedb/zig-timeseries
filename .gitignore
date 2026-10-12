@@ -52,3 +52,6 @@ coverage/
 
 # Local git worktrees (per-feature isolated checkouts)
 .worktrees/
+
+# Keep the hook environment regression test in the source tree.
+!/scripts/test_hook_env.py

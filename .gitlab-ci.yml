@@ -6,14 +6,17 @@ default:
   tags:
     - company
     - linux
+    - x86
 
-# Supply-chain hardening (appsec F8): all ci-catalog components below are
-# pinned to the immutable commit SHA that `v1.43.0` resolved to at the time
+# Supply-chain hardening (appsec F8): ci-catalog components below are
+# pinned to immutable commits. Most retain the SHA that `v1.43.0` resolved to at the time
 # of pinning, rather than to the mutable tag itself. `glab ci lint` confirmed
 # GitLab's component `include:` accepts a 40-char commit SHA in place of a
 # semver ref.
 #
 #   tag v1.43.0 (gitlab.com/devnw/ci-catalog) -> commit 7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+#   release-semantic: v1.55.8 -> commit 3122045afd7832332b342ca72065e4db7dde5ed4
+#     Adds CI_JOB_TOKEN release publication (SONNY-4829).
 #
 # Drift-detection expectation: if `git ls-remote https://gitlab.com/devnw/ci-catalog.git v1.43.0`
 # (peeled, i.e. `refs/tags/v1.43.0^{}`) ever reports a different commit than
@@ -23,20 +26,39 @@ default:
 include:
   # Security scanning
   - component: gitlab.com/devnw/ci-catalog/security-sast@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
   - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
   - component: gitlab.com/devnw/ci-catalog/security-secrets@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
   - component: gitlab.com/devnw/ci-catalog/security-gitleaks@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
 
   # Code quality
   - component: gitlab.com/devnw/ci-catalog/zig-format@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
 
   # SBOM
   - component: gitlab.com/devnw/ci-catalog/sbom-generate@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
   - component: gitlab.com/devnw/ci-catalog/sbom-scan@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@3122045afd7832332b342ca72065e4db7dde5ed4
+    inputs:
+      tags: ["company", "linux", "x86"]
+      release_auth: job_token
   - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@7dafa6b7aa3b2254b109a31c6791437c14e7ce3c
+    inputs:
+      tags: ["company", "linux", "x86"]
 
 variables:
   ZIG_VERSION: "0.16.0"
@@ -258,3 +280,26 @@ bench-regression:
   allow_failure: true
   needs:
     - build
+
+# SONNY-4778: tools must not redirect Git operations into this worktree.
+hook-env-regression:
+  stage: lint
+  image: python:3.14-slim-bookworm
+  tags: [company, linux, x86]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git
+  script:
+    - python3 scripts/test_hook_env.py
+
+test-source-package:
+  stage: test
+  image: debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
+  tags: [company, linux, x86]
+  before_script:
+    - *install-zig
+    - apt-get install -y --no-install-recommends git
+  script:
+    - python3 scripts/check_source_package.py --jobs 2
+  needs:
+    - build
+  allow_failure: false

@@ -27,7 +27,7 @@
 const std = @import("std");
 
 /// Library version.
-pub const version = "0.1.0";
+pub const version = "0.1.17";
 
 // Re-export submodules.
 pub const types = @import("types.zig");
