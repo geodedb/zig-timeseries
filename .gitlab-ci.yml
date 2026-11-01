@@ -183,7 +183,7 @@ build:
   # repointed/compromised upstream image can't silently run CI -- this image
   # is where SEC-4's toolchain-hash verification (curl/sha256sum) executes.
   # Refresh periodically (e.g. via Renovate) so the pin doesn't rot.
-  image: debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+  image: debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
   before_script:
     - *install-zig
   script:
@@ -194,7 +194,7 @@ build:
 # -Doptimize= entirely (matching Zig's default), other modes pass it explicitly.
 .test-matrix:
   stage: test
-  image: debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+  image: debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
   before_script:
     - *install-zig
   script:
@@ -234,7 +234,7 @@ test-integration:
 #   other : fuzzer found a crash - fail the job
 fuzz:
   stage: fuzz
-  image: debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+  image: debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
   before_script:
     - *install-zig
   script:
@@ -257,7 +257,7 @@ fuzz:
 # Results are stored as artifacts for trend analysis.
 bench-regression:
   stage: fuzz
-  image: debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+  image: debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
   before_script:
     - *install-zig
   script:
@@ -285,7 +285,7 @@ hook-env-regression:
 
 test-source-package:
   stage: test
-  image: debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
+  image: debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
   tags: [company, linux, x86]
   before_script:
     - *install-zig
