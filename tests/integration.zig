@@ -13,7 +13,7 @@ const lib = @import("timeseries");
 // ============================================================================
 
 test "integration: version is defined" {
-    try std.testing.expectEqualStrings("0.1.19", lib.version);
+    try std.testing.expectEqualStrings("0.1.20", lib.version);
 }
 
 test "integration: DTW -> feature extraction pipeline" {
